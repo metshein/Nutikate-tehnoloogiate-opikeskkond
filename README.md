@@ -2,7 +2,7 @@
 
 **Märgistus:** 🟢 oluline · 🟡 võimalik · 🔴 üldjuhul mitte
 
-| Õppemoodul | Filmidroon | FPV / võistlusdroon | Ehitatav droon | Programmeeritav droon | AI / autonoomne droon | Kaugjuhitav robotauto | Ehitatav maismaarobot | Programmeeritav robot | Autonoomne AI-robot |
+| Õppemoodul | <img src="assets/icons/filmidroon.svg" alt="Filmidroon" width="32"> Filmidroon | <img src="assets/icons/fpv-droon.svg" alt="FPV / võistlusdroon" width="32"> FPV / võistlusdroon | <img src="assets/icons/ehitatav-droon.svg" alt="Ehitatav droon" width="32"> Ehitatav droon | <img src="assets/icons/programmeeritav-droon.svg" alt="Programmeeritav droon" width="32"> Programmeeritav droon | <img src="assets/icons/ai-droon.svg" alt="AI / autonoomne droon" width="32"> AI / autonoomne droon | <img src="assets/icons/robotauto.svg" alt="Kaugjuhitav robotauto" width="32"> Kaugjuhitav robotauto | <img src="assets/icons/maismaarobot.svg" alt="Ehitatav maismaarobot" width="32"> Ehitatav maismaarobot | <img src="assets/icons/programmeeritav-robot.svg" alt="Programmeeritav robot" width="32"> Programmeeritav robot | <img src="assets/icons/ai-robot.svg" alt="Autonoomne AI-robot" width="32"> Autonoomne AI-robot |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | Programmeerimine | 🔴 | 🟡 | 🟡 | 🟢 | 🟢 | 🔴 | 🟡 | 🟢 | 🟢 |
 | 3D modelleerimine | 🔴 | 🟡 | 🟢 | 🔴 | 🟡 | 🔴 | 🟢 | 🟡 | 🟢 |
