@@ -29,7 +29,7 @@
   let state = null;
   const ui = { mode: 'build', sel: null, wp: null, tab: 'props' };
   const view = { yaw: -32, pitch: 36, scale: 40, panX: 0, panY: 0 };
-  const anim = { playing: false, s: 0, mult: 1, last: 0 };
+  const anim = { playing: false, s: 0, mult: 4, last: 0 };
   let flight = null, issues = [], hits = [], badges = [];
   let W = 0, H = 0, PW = 0, PH = 0, dpr = 1;
   let undoS = [], redoS = [], editing = false;
