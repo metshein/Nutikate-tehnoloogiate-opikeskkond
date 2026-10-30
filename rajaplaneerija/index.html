@@ -11,63 +11,68 @@
   <header class="topbar">
     <div class="brand">
       <img src="../assets/track/ring.svg" alt="" width="26" height="26">
-      <input id="trackName" class="name-input" aria-label="Raja nimi" spellcheck="false">
+      <input id="trackName" class="name-input" aria-label="Raja nimi" data-i18n-aria="track.name" spellcheck="false">
     </div>
 
     <div class="tb-group">
-      <button data-act="new" title="Uus tühi rada">Uus</button>
-      <button data-act="open" title="Ava rajafail (.json) arvutist">Ava fail…</button>
-      <button data-act="save" title="Salvesta rada loendisse „Minu rajad“ (Ctrl+S)">Salvesta</button>
-      <select id="templateSel" title="Ava salvestatud rada või kataloogi komplekt"><option value="">Rajad…</option></select>
+      <button data-act="new" title="Uus tühi rada" data-i18n="btn.new" data-i18n-title="btn.new.t">Uus</button>
+      <button data-act="open" title="Ava rajafail (.json) arvutist" data-i18n="btn.open" data-i18n-title="btn.open.t">Ava fail…</button>
+      <button data-act="save" title="Salvesta rada loendisse „Minu rajad“ (Ctrl+S)" data-i18n="btn.save" data-i18n-title="btn.save.t">Salvesta</button>
+      <select id="templateSel" title="Ava salvestatud rada või kataloogi komplekt" data-i18n-title="tracks.t"><option value="">Rajad…</option></select>
     </div>
 
-    <div class="seg" id="modeSeg" role="group" aria-label="Režiim">
-      <button data-mode="build" title="Paiguta ja liiguta elemente (B)">Ehita</button>
-      <button data-mode="path" title="Klõpsa elemente lennujärjekorras (L)">Lennurada</button>
-    </div>
-
-    <div class="tb-group">
-      <button data-act="undo" class="icon" title="Võta tagasi (Ctrl+Z)">↶</button>
-      <button data-act="redo" class="icon" title="Tee uuesti (Ctrl+Y)">↷</button>
+    <div class="seg" id="modeSeg" role="group" aria-label="Režiim" data-i18n-aria="mode.aria">
+      <button data-mode="build" title="Paiguta ja liiguta elemente (B)" data-i18n="mode.build" data-i18n-title="mode.build.t">Ehita</button>
+      <button data-mode="path" title="Klõpsa elemente lennujärjekorras (L)" data-i18n="mode.path" data-i18n-title="mode.path.t">Lennurada</button>
     </div>
 
     <div class="tb-group">
-      <button data-act="rotL" class="icon" title="Pööra vaadet vasakule ( [ )">⟲</button>
-      <button data-act="rotR" class="icon" title="Pööra vaadet paremale ( ] )">⟳</button>
-      <button data-act="top" id="topBtn" title="Pealtvaade / 2,5D (T)">Pealt</button>
-      <button data-act="fit" title="Mahuta saal ekraanile (F)">Mahuta</button>
+      <button data-act="undo" class="icon" title="Võta tagasi (Ctrl+Z)" data-i18n-title="btn.undo.t">↶</button>
+      <button data-act="redo" class="icon" title="Tee uuesti (Ctrl+Y)" data-i18n-title="btn.redo.t">↷</button>
     </div>
 
     <div class="tb-group">
-      <button data-act="play" id="playBtn" class="primary" title="Esita lend (P)">▶ Esita</button>
-      <select id="speedSel" title="Animatsiooni kiirus">
+      <button data-act="rotL" class="icon" title="Pööra vaadet vasakule ( [ )" data-i18n-title="btn.rotL.t">⟲</button>
+      <button data-act="rotR" class="icon" title="Pööra vaadet paremale ( ] )" data-i18n-title="btn.rotR.t">⟳</button>
+      <button data-act="top" id="topBtn" title="Pealtvaade / 2,5D (T)" data-i18n-title="btn.top.t">Pealt</button>
+      <button data-act="fit" title="Mahuta saal ekraanile (F)" data-i18n="btn.fit" data-i18n-title="btn.fit.t">Mahuta</button>
+    </div>
+
+    <div class="tb-group">
+      <button data-act="play" id="playBtn" class="primary" title="Esita lend (P)" data-i18n-title="btn.play.t">▶ Esita</button>
+      <select id="speedSel" title="Animatsiooni kiirus" data-i18n-title="speed.t">
         <option value="1">×1</option><option value="2">×2</option><option value="4">×4</option>
       </select>
     </div>
 
-    <button data-act="png" title="Salvesta pilt (PNG)">PNG</button>
+    <button data-act="png" title="Salvesta pilt (PNG)" data-i18n-title="btn.png.t">PNG</button>
+
+    <div class="seg lang" id="langSeg" role="group" aria-label="Keel" data-i18n-aria="lang.aria">
+      <button data-lang="et" lang="et">EST</button>
+      <button data-lang="en" lang="en">ENG</button>
+    </div>
   </header>
 
   <main class="layout">
-    <aside class="palette" id="palette" aria-label="Rajaelemendid"></aside>
+    <aside class="palette" id="palette" aria-label="Rajaelemendid" data-i18n-aria="palette.aria"></aside>
 
     <section class="stage">
       <div class="canvas-wrap">
-        <canvas id="scene" tabindex="0" aria-label="Droonirada 2,5D-vaates"></canvas>
+        <canvas id="scene" tabindex="0" aria-label="Droonirada 2,5D-vaates" data-i18n-aria="scene.aria"></canvas>
         <div class="hint" id="hint"></div>
       </div>
       <div class="profile-wrap">
-        <canvas id="profile" aria-label="Lennukõrguse profiil"></canvas>
+        <canvas id="profile" aria-label="Lennukõrguse profiil" data-i18n-aria="profile.aria"></canvas>
       </div>
     </section>
 
     <aside class="panel">
       <nav class="tabs" id="tabs">
-        <button data-tab="props">Omadused</button>
-        <button data-tab="path">Lennurada</button>
-        <button data-tab="check">Kontroll <span class="badge" id="checkBadge"></span></button>
-        <button data-tab="mat">Materjalid</button>
-        <button data-tab="export">Eksport</button>
+        <button data-tab="props" data-i18n="tab.props">Omadused</button>
+        <button data-tab="path" data-i18n="tab.path">Lennurada</button>
+        <button data-tab="check"><span data-i18n="tab.check">Kontroll</span> <span class="badge" id="checkBadge"></span></button>
+        <button data-tab="mat" data-i18n="tab.mat">Materjalid</button>
+        <button data-tab="export" data-i18n="tab.export">Eksport</button>
       </nav>
       <div class="panel-body" id="panelBody"></div>
     </aside>
@@ -75,6 +80,7 @@
 
   <input type="file" id="fileIn" accept=".json,application/json" hidden>
 
+  <script src="js/i18n.js?v=dev"></script>
   <script src="js/elements.js?v=dev"></script>
   <script src="js/app.js?v=dev"></script>
 </body>

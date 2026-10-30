@@ -5,7 +5,7 @@
   const rad = d => d * Math.PI / 180;
   const uid = () => Math.random().toString(36).slice(2, 9);
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const num = (n, d = 2) => (+n.toFixed(d)).toString().replace('.', ',');
+  const num = (n, d = 2) => { const s = (+n.toFixed(d)).toString(); return LANG === 'en' ? s : s.replace('.', ','); };
   const money = n => '$' + n.toFixed(2);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -21,8 +21,6 @@
   const STORE = 'droonirajaplaneerija.v1';
   const LIB = 'droonirajaplaneerija.rajad';
   const PATH_COLOR = '#7c3aed';
-  const TURN_LABEL = { pass: 'möödu', uturn: 'U-pööre', circle: 'täisring' };
-  const SIDE_LABEL = { left: 'vasakult', right: 'paremalt' };
 
   const canvas = $('#scene'), ctx = canvas.getContext('2d');
   const prof = $('#profile'), pctx = prof.getContext('2d');
@@ -38,12 +36,15 @@
 
   // ---------- olek ----------
   function defaultState() {
-    return { name: 'Uus rada', hall: { w: 20, l: 12, h: 5, grid: 0.5 }, drone: 'codrone', cruise: 1.0, elements: [], path: [] };
+    return { name: tr('track.new'), hall: { w: 20, l: 12, h: 5, grid: 0.5 }, drone: 'codrone', cruise: 1.0, elements: [], path: [] };
   }
   function byId(id) { return state.elements.find(e => e.id === id); }
   function T(el) { return TYPES[el.type]; }
   function V(el) { return T(el).variants[el.v] || T(el).variants[0]; }
   function elZ(el) { return el.z != null ? el.z : V(el).z; }
+  // Inglise keeles on elemendi nimi kataloogi nimi (või nameEn, kui kataloogi nimi on tootekood)
+  const typeName = t => LANG === 'en' ? t.nameEn || t.en : t.name;
+  const groupName = g => LANG === 'en' ? GROUPS_EN[g] || g : g;
 
   function wpDefaults(kind) {
     if (kind === 'pylon') return { side: 'left', turn: 'pass', hover: 0 };
@@ -140,20 +141,20 @@
 
   // ---------- lennutrajektoor ----------
   function wpLabel(wp, i) {
-    if (!wp.el) return `${i + 1}. Vaba punkt`;
+    if (!wp.el) return `${i + 1}. ${tr('wp.free')}`;
     const el = byId(wp.el);
     if (!el) return `${i + 1}. ?`;
     const t = T(el), os = t.kind === 'gate' ? t.openings(V(el), elZ(el)) : [];
-    return `${i + 1}. ${t.name}${os.length > 1 ? ' – ' + os[Math.min(wp.opening || 0, os.length - 1)].name.toLowerCase() : ''}`;
+    return `${i + 1}. ${typeName(t)}${os.length > 1 ? ' – ' + loc(os[Math.min(wp.opening || 0, os.length - 1)], 'name').toLowerCase() : ''}`;
   }
   function wpAction(wp, i, n) {
-    if (!wp.el) return 'lenda punkti';
+    if (!wp.el) return tr('act.fly');
     const el = byId(wp.el);
     if (!el) return '';
     const k = T(el).kind;
-    if (k === 'pad') return i === 0 ? 'õhkutõus' : i === n - 1 ? 'maandumine' : 'maandu ja tõuse';
-    if (k === 'pylon') return `${TURN_LABEL[wp.turn || 'pass']} ${SIDE_LABEL[wp.side || 'left']}`;
-    return 'läbi ava' + (wp.dir === 'rev' ? ' (vastassuunas)' : '');
+    if (k === 'pad') return tr(i === 0 ? 'act.takeoff' : i === n - 1 ? 'act.land' : 'act.touch');
+    if (k === 'pylon') return tr('act.pylon', { turn: tr('turn.' + (wp.turn || 'pass')), side: tr('side.' + (wp.side || 'left')) });
+    return tr('act.gate') + (wp.dir === 'rev' ? tr('act.rev') : '');
   }
 
   function computePath() {
@@ -173,7 +174,7 @@
       const move = p => ops.push({ op: 'move', p, wp: idx, label, act });
       if (!wp.el) {
         const p = [wp.x, wp.y, wp.z];
-        if (i === 0) { push([p[0], p[1], 0], idx); ops.push({ op: 'takeoff', p, wp: idx, label, act: 'õhkutõus' }); }
+        if (i === 0) { push([p[0], p[1], 0], idx); ops.push({ op: 'takeoff', p, wp: idx, label, act: tr('act.takeoff') }); }
         push(p, idx, { wp: idx, kind: 'free', anchor: p });
         move(p);
       } else {
@@ -189,7 +190,7 @@
           } else {
             push(up, idx); push(g, idx, mark); push(up, idx);
             move(up); ops.push({ op: 'land', wp: idx, label, act });
-            ops.push({ op: 'wait', t: Math.max(2, wp.hover || 0), wp: idx, label, act: 'oota platsil' });
+            ops.push({ op: 'wait', t: Math.max(2, wp.hover || 0), wp: idx, label, act: tr('act.wait') });
             ops.push({ op: 'takeoff', p: g, wp: idx, label, act }); move(up);
           }
         } else if (t.kind === 'pylon') {
@@ -200,7 +201,7 @@
           const steps = Math.ceil((end - 45) / 30), mid = Math.round(steps / 2);
           if (i === 0) {
             const p0 = [F[0] + Math.cos(a + s * rad(45)) * R, F[1] + Math.sin(a + s * rad(45)) * R, 0];
-            push(p0, idx); ops.push({ op: 'takeoff', p: p0, wp: idx, label, act: 'õhkutõus' });
+            push(p0, idx); ops.push({ op: 'takeoff', p: p0, wp: idx, label, act: tr('act.takeoff') });
           }
           for (let k = 0; k <= steps; k++) {
             const th = a + s * rad(45 + (end - 45) * k / steps);
@@ -219,7 +220,7 @@
             if (P) flip = dist(P, B) < dist(P, A);
           }
           const [e1, e2] = flip ? [B, A] : [A, B];
-          if (i === 0) { push([e1[0], e1[1], 0], idx); ops.push({ op: 'takeoff', p: e1, wp: idx, label, act: 'õhkutõus' }); }
+          if (i === 0) { push([e1[0], e1[1], 0], idx); ops.push({ op: 'takeoff', p: e1, wp: idx, label, act: tr('act.takeoff') }); }
           push(e1, idx);
           push(o.c, idx, { wp: idx, kind: 'gate', anchor: o.c, o });
           push(e2, idx);
@@ -227,14 +228,14 @@
         }
       }
       if (wp.hover > 0 && !(wp.el && T(byId(wp.el)).kind === 'pad' && i > 0 && i < n - 1)) {
-        ops.push({ op: 'wait', t: wp.hover, wp: idx, label, act: `hõlju ${num(wp.hover, 1)} s` });
+        ops.push({ op: 'wait', t: wp.hover, wp: idx, label, act: tr('act.hover', { s: num(wp.hover, 1) }) });
       }
     });
 
     if (ops.length && ops[ops.length - 1].op !== 'land') {
       const p = last();
       push([p[0], p[1], 0], ctrl[ctrl.length - 1].wp);
-      ops.push({ op: 'land', wp: ctrl[ctrl.length - 1].wp, label: 'Lõpp', act: 'maandumine' });
+      ops.push({ op: 'land', wp: ctrl[ctrl.length - 1].wp, label: tr('act.end'), act: tr('act.land') });
     }
 
     // Nurkade ümardamine – läbi avade jääb lend sirgeks
@@ -304,24 +305,24 @@
     const els = state.elements, fps = els.map(e => footprint(e, 0.05));
     els.forEach((el, i) => {
       if (footprint(el).some(([x, y]) => x < -0.01 || y < -0.01 || x > w + 0.01 || y > l + 0.01))
-        out.push({ lvl: 'err', el: el.id, msg: `${T(el).name} ulatub saalist välja.` });
-      if (topZ(el) > h) out.push({ lvl: 'err', el: el.id, msg: `${T(el).name} on saali jaoks liiga kõrge (${num(topZ(el), 1)} m).` });
+        out.push({ lvl: 'err', el: el.id, msg: tr('chk.outside', { name: typeName(T(el)) }) });
+      if (topZ(el) > h) out.push({ lvl: 'err', el: el.id, msg: tr('chk.tall', { name: typeName(T(el)), h: num(topZ(el), 1) }) });
       for (let j = i + 1; j < els.length; j++) {
-        if (overlap(fps[i], fps[j])) out.push({ lvl: 'warn', el: el.id, msg: `${T(el).name} ja ${T(els[j]).name.toLowerCase()} kattuvad.` });
+        if (overlap(fps[i], fps[j])) out.push({ lvl: 'warn', el: el.id, msg: tr('chk.overlap', { a: typeName(T(el)), b: typeName(T(els[j])).toLowerCase() }) });
       }
     });
 
     const wps = state.path;
-    if (!wps.length) { out.push({ lvl: 'info', msg: 'Lennurada puudub. Vali „Lennurada“ ja klõpsa elemente lennujärjekorras.' }); return out; }
+    if (!wps.length) { out.push({ lvl: 'info', msg: tr('chk.nopath') }); return out; }
     const first = wps[0].el && byId(wps[0].el), lastEl = wps[wps.length - 1].el && byId(wps[wps.length - 1].el);
-    if (!first || T(first).kind !== 'pad') out.push({ lvl: 'info', msg: 'Rada ei alga maandumisplatsilt.' });
-    if (!lastEl || T(lastEl).kind !== 'pad') out.push({ lvl: 'info', msg: 'Rada ei lõpe maandumisplatsil.' });
+    if (!first || T(first).kind !== 'pad') out.push({ lvl: 'info', msg: tr('chk.start') });
+    if (!lastEl || T(lastEl).kind !== 'pad') out.push({ lvl: 'info', msg: tr('chk.end') });
 
     wps.forEach((wp, i) => {
       const el = wp.el && byId(wp.el);
       if (!el || T(el).kind !== 'gate') return;
       const os = openings(el), o = os[Math.min(wp.opening || 0, os.length - 1)];
-      if (o && o.size < drone.minGap) out.push({ lvl: 'warn', el: el.id, msg: `${i + 1}. ${T(el).name}: ava ${Math.round(o.size * 100)} cm on drooni ${drone.name} jaoks kitsas.` });
+      if (o && o.size < drone.minGap) out.push({ lvl: 'warn', el: el.id, msg: tr('chk.narrow', { i: i + 1, name: typeName(T(el)), cm: Math.round(o.size * 100), drone: drone.name }) });
     });
 
     let outside = false, ceiling = false;
@@ -339,9 +340,9 @@
         if (z < tops.get(el.id) + 0.1 && inPoly([x, y], elFp.get(el.id))) hitEls.add(el.id);
       }
     });
-    if (outside) out.push({ lvl: 'err', msg: 'Lennutrajektoor läheb seinale lähemale kui 20 cm.' });
-    if (ceiling) out.push({ lvl: 'err', msg: 'Lennutrajektoor läheb laele lähemale kui 30 cm.' });
-    for (const id of hitEls) out.push({ lvl: 'warn', el: id, msg: `Trajektoor läheb läbi elemendi ${T(byId(id)).name.toLowerCase()}. Kontrolli järjekorda või lisa vaba punkt.` });
+    if (outside) out.push({ lvl: 'err', msg: tr('chk.wall') });
+    if (ceiling) out.push({ lvl: 'err', msg: tr('chk.ceiling') });
+    for (const id of hitEls) out.push({ lvl: 'warn', el: id, msg: tr('chk.hit', { name: typeName(T(byId(id))).toLowerCase() }) });
     return out;
   }
 
@@ -560,7 +561,7 @@
     pctx.font = '11px system-ui, sans-serif'; pctx.textBaseline = 'middle';
     if (flight.length < 0.01) {
       pctx.fillStyle = '#94a3b8'; pctx.textAlign = 'center';
-      pctx.fillText('Kõrgusprofiil ilmub siia, kui lennurada on koostatud.', PW / 2, PH / 2);
+      pctx.fillText(tr('profile.empty'), PW / 2, PH / 2);
       return;
     }
     const L = flight.length, zMax = Math.max(state.hall.h, 2.5), l0 = 40, r0 = 14, t0 = 16, b0 = 20;
@@ -613,7 +614,7 @@
   // ---------- animatsioon ----------
   function setPlaying(on) {
     anim.playing = on;
-    $('#playBtn').textContent = on ? '■ Peata' : '▶ Esita';
+    $('#playBtn').textContent = tr(on ? 'btn.stop' : 'btn.play');
     if (on) {
       if (anim.s >= flight.length - 1e-3) anim.s = 0;
       anim.last = performance.now();
@@ -736,9 +737,7 @@
     updateHint(); renderPanel(); requestRender();
   }
   function updateHint() {
-    $('#hint').innerHTML = ui.mode === 'path'
-      ? '<b>Lennurada:</b> klõpsa elemente lennujärjekorras · klõps põrandal lisab vaba punkti · uus punkt lisatakse valitud punkti järele · paremklõps või tühik + lohistamine liigutab vaadet'
-      : '<b>Ehita:</b> lohista elemente vasakult saali · <kbd>R</kbd>/<kbd>Shift+R</kbd> pöörab · <kbd>Del</kbd> kustutab · <kbd>Ctrl+D</kbd> kopeerib · Shift lohistamisel lülitab ruudustiku välja · ratas suumib';
+    $('#hint').innerHTML = tr(ui.mode === 'path' ? 'hint.path' : 'hint.build');
   }
 
   // ---------- hiir ----------
@@ -882,7 +881,7 @@
   function rotateView(d) { view.yaw += d; fitView(); requestRender(); }
   function toggleTop() {
     view.pitch = view.pitch > 80 ? 36 : 90;
-    $('#topBtn').textContent = view.pitch > 80 ? '2,5D' : 'Pealt';
+    $('#topBtn').textContent = tr(view.pitch > 80 ? 'btn.top25' : 'btn.top');
     fitView(); requestRender();
   }
 
@@ -893,30 +892,30 @@
     a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
   }
-  const fileBase = () => (state.name || 'droonirada').replace(/[^\p{L}\p{N}_-]+/gu, '_');
+  const fileBase = () => (state.name || tr('file.base')).replace(/[^\p{L}\p{N}_-]+/gu, '_');
   function saveFile() { download(fileBase() + '.droonirada.json', JSON.stringify(state, null, 2), 'application/json'); }
 
   // „Minu rajad“: salvestatud rajad selle brauseri mälus
   function loadLib() { try { const l = JSON.parse(localStorage.getItem(LIB)); return Array.isArray(l) ? l : []; } catch (e) { return []; } }
   function saveLib(lib) {
     try { localStorage.setItem(LIB, JSON.stringify(lib)); return true; }
-    catch (e) { alert('Brauser ei luba radu salvestada. Kasuta „Laadi alla .json“.'); return false; }
+    catch (e) { alert(tr('msg.noStorage')); return false; }
   }
   function saveToLib() {
-    const lib = loadLib(), name = state.name.trim() || 'Nimetu rada', i = lib.findIndex(r => r.name === name);
+    const lib = loadLib(), name = state.name.trim() || tr('track.untitled'), i = lib.findIndex(r => r.name === name);
     const entry = { name, saved: Date.now(), data: JSON.parse(JSON.stringify(state)) };
     if (i >= 0) lib[i] = entry; else lib.push(entry);
-    lib.sort((a, b) => a.name.localeCompare(b.name, 'et'));
+    lib.sort((a, b) => a.name.localeCompare(b.name, LANG));
     if (!saveLib(lib)) return;
     fillTrackSelect();
     const b = document.querySelector('.topbar [data-act="save"]');
-    b.textContent = i >= 0 ? 'Uuendatud ✓' : 'Salvestatud ✓';
-    clearTimeout(b._t); b._t = setTimeout(() => { b.textContent = 'Salvesta'; }, 1800);
+    b.textContent = tr(i >= 0 ? 'btn.updated' : 'btn.saved');
+    clearTimeout(b._t); b._t = setTimeout(() => { b.textContent = tr('btn.save'); }, 1800);
     if (ui.tab === 'export') renderPanel();
   }
   function openState(data, name) {
-    if (!data || !Array.isArray(data.elements) || !Array.isArray(data.path)) { alert(`Rada „${name}“ on vigane.`); return; }
-    if (state.elements.length && !confirm(`Kas avada „${name}“? Praegune rada asendatakse (Ctrl+Z toob tagasi).`)) return;
+    if (!data || !Array.isArray(data.elements) || !Array.isArray(data.path)) { alert(tr('msg.invalid', { name })); return; }
+    if (state.elements.length && !confirm(tr('msg.openConfirm', { name }))) return;
     checkpoint();
     const copy = JSON.parse(JSON.stringify(data));
     state = Object.assign(defaultState(), copy, { hall: Object.assign(defaultState().hall, copy.hall) });
@@ -938,17 +937,17 @@
         .then(r => r.ok ? r.json() : null)
         .then(t => t && Array.isArray(t.elements) && Array.isArray(t.path) ? Object.assign(t, { name: t.name || n.replace(/\.json$/i, '') }) : null)
         .catch(() => null)));
-      instructorList = tracks.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'et'));
+      instructorList = tracks.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, LANG));
       fillTrackSelect();
     } catch (e) { /* juhendaja radu pole saadaval */ }
   }
   function deleteFromLib(i) {
     const lib = loadLib();
-    if (!lib[i] || !confirm(`Kas kustutada „${lib[i].name}“ loendist „Minu rajad“?`)) return;
+    if (!lib[i] || !confirm(tr('msg.delConfirm', { name: lib[i].name }))) return;
     lib.splice(i, 1);
     saveLib(lib); fillTrackSelect(); renderPanel();
   }
-  const dateStr = t => new Date(t).toLocaleString('et-EE', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const dateStr = t => new Date(t).toLocaleString(tr('locale'), { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   // Raja elementide hind kataloogi järgi (ainult komplektis müüdavad elemendid jäävad välja)
   function trackPrice(data) {
     let sum = 0;
@@ -960,23 +959,23 @@
   }
   function fillTrackSelect() {
     const lib = loadLib(), ins = instructorTracks();
-    tsel.innerHTML = '<option value="">Rajad…</option>' +
-      (lib.length ? `<optgroup label="Minu rajad">${lib.map((r, i) => `<option value="m:${i}">${esc(r.name)} (${money(trackPrice(r.data))})</option>`).join('')}</optgroup>` : '') +
-      (ins.length ? `<optgroup label="Juhendaja rajad">${ins.map((r, i) => `<option value="j:${i}">${esc(r.name || 'Rada ' + (i + 1))} (${money(trackPrice(r))})</option>`).join('')}</optgroup>` : '') +
-      `<optgroup label="Kataloogi komplektid">${TEMPLATES.map((t, i) => `<option value="t:${i}">${esc(t.name)} (${money(t.price)})</option>`).join('')}</optgroup>`;
+    tsel.innerHTML = `<option value="">${tr('tracks')}</option>` +
+      (lib.length ? `<optgroup label="${tr('tracks.mine')}">${lib.map((r, i) => `<option value="m:${i}">${esc(r.name)} (${money(trackPrice(r.data))})</option>`).join('')}</optgroup>` : '') +
+      (ins.length ? `<optgroup label="${tr('tracks.instructor')}">${ins.map((r, i) => `<option value="j:${i}">${esc(r.name || tr('track.n', { n: i + 1 }))} (${money(trackPrice(r))})</option>`).join('')}</optgroup>` : '') +
+      `<optgroup label="${tr('tracks.catalog')}">${TEMPLATES.map((t, i) => `<option value="t:${i}">${esc(t.name)} (${money(t.price)})</option>`).join('')}</optgroup>`;
   }
   function openFile(file) {
     const r = new FileReader();
     r.onload = () => {
       try {
         const s = JSON.parse(r.result);
-        if (!Array.isArray(s.elements) || !Array.isArray(s.path)) throw new Error('vale vorming');
+        if (!Array.isArray(s.elements) || !Array.isArray(s.path)) throw new Error(tr('msg.badFormat'));
         s.elements = s.elements.filter(e => TYPES[e.type]);
         checkpoint();
         state = Object.assign(defaultState(), s, { hall: Object.assign(defaultState().hall, s.hall) });
         ui.sel = null; ui.wp = null;
         afterLoad(); fitView(); requestRender();
-      } catch (err) { alert('Faili ei õnnestunud avada: ' + err.message); }
+      } catch (err) { alert(tr('msg.openFail', { err: err.message })); }
     };
     r.readAsText(file);
   }
@@ -991,10 +990,10 @@
     const rot = rad(startHeading()), f = [-Math.sin(rot), Math.cos(rot)], l = [-f[1], f[0]];
     const lines = [
       `# ${state.name} – CoDrone EDU`,
-      `# Genereeritud droonirajaplaneerijaga ${new Date().toLocaleDateString('et-EE')}`,
-      '# Droon asetatakse stardiplatsile nina noole suunas (vt stardiplatsi omadusi).',
-      '# move_distance(edasi, vasakule, üles, kiirus) – meetrites ja m/s, drooni enda suhtes.',
-      '# NB! Kontrolli liigutusi enne võistlust ohutus keskkonnas ja madalal kiirusel.',
+      tr('py.gen', { date: new Date().toLocaleDateString(tr('locale')) }),
+      tr('py.place'),
+      tr('py.move'),
+      tr('py.safety'),
       '',
       'from codrone_edu.drone import *',
       'import time',
@@ -1003,7 +1002,7 @@
       'drone.pair()',
       '',
     ];
-    if (!ops.length) return lines.concat(['# Lennurada on tühi.', 'drone.close()']).join('\n');
+    if (!ops.length) return lines.concat([tr('py.empty'), 'drone.close()']).join('\n');
     let pos = null, lastWp = -1;
     for (const o of ops) {
       if (o.wp !== lastWp && o.op !== 'land') { lines.push('', `# ${o.label} – ${o.act}`); lastWp = o.wp; }
@@ -1015,7 +1014,7 @@
         lines.push(`drone.move_distance(${fw.toFixed(2)}, ${lf.toFixed(2)}, ${v[2].toFixed(2)}, ${d.speed})`);
         pos = o.p;
       } else if (o.op === 'wait') lines.push(`time.sleep(${o.t})`);
-      else if (o.op === 'land') { lines.push('', `# ${o.label} – maandumine`, 'drone.land()'); pos = null; lastWp = -1; }
+      else if (o.op === 'land') { lines.push('', `# ${o.label} – ${tr('act.land')}`, 'drone.land()'); pos = null; lastWp = -1; }
     }
     lines.push('drone.close()');
     return lines.join('\n');
@@ -1024,10 +1023,10 @@
     const rows = [];
     let pos = null, cur = null;
     for (const o of flight.ops) {
-      if (o.op === 'takeoff') { pos = [o.p[0], o.p[1], 0]; cur = { wp: o.wp, label: o.label, act: 'õhkutõus', dist: 0, hdg: null, z: 0 }; rows.push(cur); continue; }
+      if (o.op === 'takeoff') { pos = [o.p[0], o.p[1], 0]; cur = { wp: o.wp, label: o.label, act: tr('act.takeoff'), dist: 0, hdg: null, z: 0 }; rows.push(cur); continue; }
       if (o.op === 'land') {
-        if (cur && cur.wp === o.wp) { cur.act = 'maandumine'; cur.z = 0; }
-        else rows.push({ label: o.label, act: 'maandumine', dist: 0, hdg: null, z: 0 });
+        if (cur && cur.wp === o.wp) { cur.act = tr('act.land'); cur.z = 0; }
+        else rows.push({ label: o.label, act: tr('act.land'), dist: 0, hdg: null, z: 0 });
         cur = null; continue;
       }
       if (o.op === 'wait') { rows.push({ label: o.label, act: o.act, dist: 0, hdg: null, z: pos ? pos[2] : 0 }); cur = null; continue; }
@@ -1043,11 +1042,14 @@
     }
     return rows;
   }
+  // Eestikeelne Excel ootab semikoolonit ja komakohta, ingliskeelne koma ja punkti
+  function csv(head, rows) {
+    const sep = LANG === 'en' ? ',' : ';';
+    const cell = c => { c = String(c); return c.includes(sep) || c.includes('"') ? '"' + c.replace(/"/g, '""') + '"' : c; };
+    return [head.split('|')].concat(rows).map(r => r.map(cell).join(sep)).join('\n');
+  }
   function planCsv() {
-    const rows = flightPlan();
-    return ['Nr;Etapp;Tegevus;Kaugus (m);Suund (°);Kõrgus (m)']
-      .concat(rows.map((r, i) => [i + 1, r.label, r.act, num(r.dist, 2), r.hdg == null ? '' : Math.round(r.hdg), num(r.z, 2)].join(';')))
-      .join('\n');
+    return csv(tr('csv.plan'), flightPlan().map((r, i) => [i + 1, r.label, r.act, num(r.dist, 2), r.hdg == null ? '' : Math.round(r.hdg), num(r.z, 2)]));
   }
   function materials() {
     const m = new Map();
@@ -1056,12 +1058,11 @@
       if (!m.has(key)) m.set(key, { t: T(el), v: V(el), n: 0 });
       m.get(key).n++;
     }
-    return [...m.values()].sort((a, b) => GROUPS.indexOf(a.t.group) - GROUPS.indexOf(b.t.group) || a.t.name.localeCompare(b.t.name, 'et'));
+    return [...m.values()].sort((a, b) => GROUPS.indexOf(a.t.group) - GROUPS.indexOf(b.t.group) || typeName(a.t).localeCompare(typeName(b.t), LANG));
   }
   function materialsCsv() {
-    return ['Element;Kataloogi nimi;Suurus;Kogus;Hind/tk (USD);Kokku (USD)']
-      .concat(materials().map(r => [r.t.name, r.t.en, r.v.label, r.n, r.v.price == null ? '' : r.v.price.toFixed(2).replace('.', ','), r.v.price == null ? '' : (r.v.price * r.n).toFixed(2).replace('.', ',')].join(';')))
-      .join('\n');
+    const usd = n => n == null ? '' : LANG === 'en' ? n.toFixed(2) : n.toFixed(2).replace('.', ',');
+    return csv(tr('csv.mat'), materials().map(r => [typeName(r.t), r.t.en, loc(r.v, 'label'), r.n, usd(r.v.price), usd(r.v.price == null ? null : r.v.price * r.n)]));
   }
   function exportPng() {
     const was = ui.sel;
@@ -1084,147 +1085,148 @@
     const el = ui.sel && byId(ui.sel);
     if (!el) {
       const h = state.hall;
-      return `<h2>Saal</h2>
-        ${field('Laius (m)', numIn('hall.w', h.w, 4, 60, 0.5))}
-        ${field('Pikkus (m)', numIn('hall.l', h.l, 4, 60, 0.5))}
-        ${field('Lae kõrgus (m)', numIn('hall.h', h.h, 2, 15, 0.1))}
-        ${field('Ruudustik', selectIn('hall.grid', [[0.25, '25 cm'], [0.5, '50 cm'], [1, '1 m']], h.grid))}
-        <h4>Kuidas kasutada</h4>
-        <p class="note">Lohista elemente vasakult paletist saali või klõpsa elemendil, et see keskele lisada. Klõps elemendil valib selle.</p>
-        <p class="note"><kbd>R</kbd> pöörab 15° · <kbd>Shift</kbd>+ratas pöörab · nooled nihutavad · <kbd>Del</kbd> kustutab · <kbd>Ctrl+D</kbd> kopeerib · <kbd>Ctrl+Z</kbd> võtab tagasi · <kbd>[</kbd> <kbd>]</kbd> pööravad vaadet · <kbd>T</kbd> pealtvaade · <kbd>L</kbd> lennurada · <kbd>P</kbd> esitab.</p>
-        <p class="note">Pooleli olev rada säilib brauseris automaatselt. „Salvesta“ (<kbd>Ctrl+S</kbd>) lisab raja tema nimega loendisse „Rajad…“ alamloendisse „Minu rajad“.</p>`;
+      return `<h2>${tr('p.hall')}</h2>
+        ${field(tr('p.width'), numIn('hall.w', h.w, 4, 60, 0.5))}
+        ${field(tr('p.length'), numIn('hall.l', h.l, 4, 60, 0.5))}
+        ${field(tr('p.ceiling'), numIn('hall.h', h.h, 2, 15, 0.1))}
+        ${field(tr('p.grid'), selectIn('hall.grid', [[0.25, '25 cm'], [0.5, '50 cm'], [1, '1 m']], h.grid))}
+        <h4>${tr('p.howto')}</h4>
+        <p class="note">${tr('p.howto1')}</p>
+        <p class="note">${tr('p.howto2')}</p>
+        <p class="note">${tr('p.howto3')}</p>`;
     }
     const t = T(el), v = V(el), z = elZ(el);
     const os = t.kind === 'gate' ? openings(el) : [];
     const inPath = state.path.map((w, i) => w.el === el.id ? i + 1 : null).filter(Boolean);
-    let html = `<h2><img src="../assets/track/${t.icon}" alt="">${esc(t.name)}</h2>
-      <p class="sub">${esc(t.en)}${inPath.length ? ' · lennupunkt ' + inPath.join(', ') : ''}</p>
-      ${field('Suurus', selectIn('el.v', t.variants.map((x, i) => [i, x.label + (x.price != null ? ' – ' + money(x.price) : '')]), el.v))}
-      ${field('Pööre', rangeIn('el.rot', el.rot, -180, 180, 15, '°'))}
+    const sub = [typeName(t) !== t.en ? t.en : '', inPath.length ? tr('p.inPath', { list: inPath.join(', ') }) : ''].filter(Boolean).join(' · ');
+    let html = `<h2><img src="../assets/track/${t.icon}" alt="">${esc(typeName(t))}</h2>
+      ${sub ? `<p class="sub">${esc(sub)}</p>` : ''}
+      ${field(tr('p.size'), selectIn('el.v', t.variants.map((x, i) => [i, loc(x, 'label') + (x.price != null ? ' – ' + money(x.price) : '')]), el.v))}
+      ${field(tr('p.rot'), rangeIn('el.rot', el.rot, -180, 180, 15, '°'))}
       ${field('X (m)', numIn('el.x', el.x, 0, state.hall.w, state.hall.grid))}
       ${field('Y (m)', numIn('el.y', el.y, 0, state.hall.l, state.hall.grid))}`;
     if (t.adjustable) {
       const [a, b] = t.zRange(v);
-      html += field('Kõrgus (kesk)', rangeIn('el.z', z, +a.toFixed(2), b, 0.05, ' m'));
+      html += field(tr('p.zc'), rangeIn('el.z', z, +a.toFixed(2), b, 0.05, ' m'));
     }
     html += `<div class="row">
-        <button data-act="el-addwp" class="primary">+ Lisa lennurajale</button>
-        <button data-act="el-rot90">Pööra 90°</button>
-        <button data-act="el-dup">Kopeeri</button>
-        <button data-act="el-del" class="danger">Kustuta</button>
+        <button data-act="el-addwp" class="primary">${tr('p.addwp')}</button>
+        <button data-act="el-rot90">${tr('p.rot90')}</button>
+        <button data-act="el-dup">${tr('p.dup')}</button>
+        <button data-act="el-del" class="danger">${tr('p.del')}</button>
       </div>`;
     if (os.length) {
-      html += '<h4>Avad</h4><p class="note">' + os.map(o => `${esc(o.name)}: ${Math.round(o.size * 100)} cm` +
-        (o.zMin != null ? `, kõrgusel ${num(o.zMin, 2)}–${num(o.zMax, 2)} m` : ', läbitakse ülalt alla')).join('<br>') +
-        '</p><p class="note">Oranž nool näitab läbilennu suunda.</p>';
+      html += `<h4>${tr('p.openings')}</h4><p class="note">` + os.map(o => `${esc(loc(o, 'name'))}: ${Math.round(o.size * 100)} cm` +
+        (o.zMin != null ? tr('p.at', { a: num(o.zMin, 2), b: num(o.zMax, 2) }) : tr('p.fromAbove'))).join('<br>') +
+        `</p><p class="note">${tr('p.arrowGate')}</p>`;
     }
-    if (t.kind === 'pad') html += '<p class="note">Oranž nool näitab drooni nina suunda stardis. Sellest sõltub CoDrone EDU koodi suund.</p>';
+    if (t.kind === 'pad') html += `<p class="note">${tr('p.arrowPad')}</p>`;
     return html;
   }
 
   function panelPath() {
     const d = DRONES[state.drone];
-    let html = `${field('Droon', selectIn('drone', Object.entries(DRONES).map(([k, x]) => [k, x.name]), state.drone))}
-      ${field('Lennukõrgus', rangeIn('cruise', state.cruise, 0.4, Math.min(3, state.hall.h - 0.3), 0.1, ' m'))}`;
+    let html = `${field(tr('path.drone'), selectIn('drone', Object.entries(DRONES).map(([k, x]) => [k, x.name]), state.drone))}
+      ${field(tr('path.cruise'), rangeIn('cruise', state.cruise, 0.4, Math.min(3, state.hall.h - 0.3), 0.1, ' m'))}`;
     if (flight.length > 0) {
       const t = flightTime();
       html += `<div class="stats">
-        <div class="stat"><b>${num(flight.length, 1)} m</b><span>trajektoori pikkus</span></div>
-        <div class="stat"><b>${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, '0')}</b><span>hinnanguline aeg (${num(d.speed, 1)} m/s)</span></div>
+        <div class="stat"><b>${num(flight.length, 1)} m</b><span>${tr('path.len')}</span></div>
+        <div class="stat"><b>${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, '0')}</b><span>${tr('path.time', { v: num(d.speed, 1) })}</span></div>
       </div>`;
     }
-    html += '<h4>Lennupunktid</h4>';
+    html += `<h4>${tr('path.wps')}</h4>`;
     if (!state.path.length) {
-      html += `<div class="empty">${ui.mode === 'path' ? 'Klõpsa saalis elemente lennujärjekorras.<br>Alusta stardiplatsist.' : 'Lülita ülal sisse „Lennurada“ ja klõpsa elemente lennujärjekorras.'}</div>`;
+      html += `<div class="empty">${tr(ui.mode === 'path' ? 'path.emptyPath' : 'path.emptyBuild')}</div>`;
     } else {
       html += '<ol class="wp-list">' + state.path.map((wp, i) => {
         const lbl = wpLabel(wp, i).replace(/^\d+\.\s*/, '');
-        return `<li data-wp="${i}" class="${ui.wp === i ? 'on' : ''}" draggable="true" title="Lohista järjekorra muutmiseks">
+        return `<li data-wp="${i}" class="${ui.wp === i ? 'on' : ''}" draggable="true" title="${tr('path.drag')}">
           <span class="wp-grip" aria-hidden="true">⠿</span>
           <span class="wp-num">${i + 1}</span>
           <span class="wp-text">${esc(lbl)}<small>${esc(wpAction(wp, i, state.path.length))}</small></span>
-          <button data-act="wp-up" data-i="${i}" title="Varem">↑</button>
-          <button data-act="wp-down" data-i="${i}" title="Hiljem">↓</button>
-          <button data-act="wp-del" data-i="${i}" title="Eemalda" class="danger">✕</button>
+          <button data-act="wp-up" data-i="${i}" title="${tr('path.up')}">↑</button>
+          <button data-act="wp-down" data-i="${i}" title="${tr('path.down')}">↓</button>
+          <button data-act="wp-del" data-i="${i}" title="${tr('path.remove')}" class="danger">✕</button>
         </li>`;
       }).join('') + '</ol>';
-      html += `<div class="row"><button data-act="path-rev">Pööra rada ümber</button><button data-act="path-clear" class="danger">Tühjenda</button></div>`;
+      html += `<div class="row"><button data-act="path-rev">${tr('path.rev')}</button><button data-act="path-clear" class="danger">${tr('path.clear')}</button></div>`;
     }
     const wp = ui.wp != null && state.path[ui.wp];
     if (wp) {
-      html += `<h4>Punkt ${ui.wp + 1}</h4>`;
+      html += `<h4>${tr('path.point', { n: ui.wp + 1 })}</h4>`;
       const el = wp.el && byId(wp.el), kind = el ? T(el).kind : 'free';
       if (kind === 'gate') {
         const os = T(el).openings(V(el), elZ(el));
-        if (os.length > 1) html += field('Ava', selectIn('wp.opening', os.map((o, i) => [i, o.name]), wp.opening || 0));
-        html += field('Suund', selectIn('wp.dir', [['auto', 'automaatne'], ['fwd', 'noole suunas'], ['rev', 'noolele vastu']], wp.dir || 'auto'));
+        if (os.length > 1) html += field(tr('path.opening'), selectIn('wp.opening', os.map((o, i) => [i, loc(o, 'name')]), wp.opening || 0));
+        html += field(tr('path.dir'), selectIn('wp.dir', ['auto', 'fwd', 'rev'].map(k => [k, tr('dir.' + k)]), wp.dir || 'auto'));
       } else if (kind === 'pylon') {
-        html += field('Lipp jääb', selectIn('wp.side', [['left', 'vasakule'], ['right', 'paremale']], wp.side || 'left'));
-        html += field('Manööver', selectIn('wp.turn', [['pass', 'möödu'], ['uturn', 'U-pööre'], ['circle', 'täisring']], wp.turn || 'pass'));
-        html += field('Kõrgus', rangeIn('wp.z', wp.z != null ? wp.z : state.cruise, 0.4, Math.min(3, state.hall.h - 0.3), 0.1, ' m'));
-        html += field('Raadius', rangeIn('wp.r', wp.r || 0.7, 0.4, 2, 0.1, ' m'));
+        html += field(tr('path.flagSide'), selectIn('wp.side', ['left', 'right'].map(k => [k, tr('flag.' + k)]), wp.side || 'left'));
+        html += field(tr('path.turn'), selectIn('wp.turn', ['pass', 'uturn', 'circle'].map(k => [k, tr('turn.' + k)]), wp.turn || 'pass'));
+        html += field(tr('path.height'), rangeIn('wp.z', wp.z != null ? wp.z : state.cruise, 0.4, Math.min(3, state.hall.h - 0.3), 0.1, ' m'));
+        html += field(tr('path.radius'), rangeIn('wp.r', wp.r || 0.7, 0.4, 2, 0.1, ' m'));
       } else if (kind === 'free') {
         html += field('X (m)', numIn('wp.x', wp.x, 0, state.hall.w, 0.25));
         html += field('Y (m)', numIn('wp.y', wp.y, 0, state.hall.l, 0.25));
-        html += field('Kõrgus', rangeIn('wp.z', wp.z, 0.3, Math.min(3, state.hall.h - 0.3), 0.1, ' m'));
+        html += field(tr('path.height'), rangeIn('wp.z', wp.z, 0.3, Math.min(3, state.hall.h - 0.3), 0.1, ' m'));
       }
       if (kind !== 'pad' || (ui.wp > 0 && ui.wp < state.path.length - 1)) {
-        html += field(kind === 'pad' ? 'Oota platsil' : 'Hõljumine', rangeIn('wp.hover', wp.hover || 0, 0, 10, 0.5, ' s'));
+        html += field(tr(kind === 'pad' ? 'path.wait' : 'path.hover'), rangeIn('wp.hover', wp.hover || 0, 0, 10, 0.5, ' s'));
       }
     }
     return html;
   }
 
   function panelCheck() {
-    if (!issues.length) return '<ul class="issues"><li><span class="lvl ok">✓</span>Probleeme ei leitud.</li></ul>';
+    if (!issues.length) return '<ul class="issues"><li><span class="lvl ok">✓</span>' + tr('chk.ok') + '</li></ul>';
     const icon = { err: '!', warn: '!', info: 'i' };
     return `<ul class="issues">${issues.map(i => `<li${i.el ? ` data-el="${i.el}"` : ''}><span class="lvl ${i.lvl}">${icon[i.lvl]}</span><span>${esc(i.msg)}</span></li>`).join('')}</ul>
-      <p class="note">Klõps teatel valib vastava elemendi.</p>`;
+      <p class="note">${tr('chk.note')}</p>`;
   }
 
   function panelMat() {
     const rows = materials();
-    if (!rows.length) return '<div class="empty">Saalis pole veel elemente.</div>';
+    if (!rows.length) return `<div class="empty">${tr('mat.empty')}</div>`;
     let total = 0, missing = 0;
     const body = rows.map(r => {
       if (r.v.price == null) missing++; else total += r.v.price * r.n;
-      return `<tr><td>${esc(r.t.name)}<br><small class="note">${esc(r.v.label)}</small></td><td class="num">${r.n}</td>
+      return `<tr><td>${esc(typeName(r.t))}<br><small class="note">${esc(loc(r.v, 'label'))}</small></td><td class="num">${r.n}</td>
         <td class="num">${r.v.price == null ? '–' : money(r.v.price)}</td><td class="num">${r.v.price == null ? '–' : money(r.v.price * r.n)}</td></tr>`;
     }).join('');
-    return `<table class="mat"><thead><tr><th>Element</th><th class="num">tk</th><th class="num">Hind</th><th class="num">Kokku</th></tr></thead>
-      <tbody>${body}</tbody><tfoot><tr><td>Kokku</td><td class="num">${state.elements.length}</td><td></td><td class="num">${money(total)}</td></tr></tfoot></table>
-      <p class="note">Hinnad on võetud kataloogist „Catalog of UAV Tracks 2026“ (USD, EXW, ilma transpordi ja maksudeta).${missing ? ' Kriipsuga elemente müüakse ainult komplektina.' : ''}</p>
-      <div class="row"><button data-act="mat-csv">Laadi alla CSV</button></div>`;
+    return `<table class="mat"><thead><tr><th>${tr('mat.el')}</th><th class="num">${tr('mat.pcs')}</th><th class="num">${tr('mat.price')}</th><th class="num">${tr('mat.total')}</th></tr></thead>
+      <tbody>${body}</tbody><tfoot><tr><td>${tr('mat.total')}</td><td class="num">${state.elements.length}</td><td></td><td class="num">${money(total)}</td></tr></tfoot></table>
+      <p class="note">${tr('mat.note')}${missing ? tr('mat.setOnly') : ''}</p>
+      <div class="row"><button data-act="mat-csv">${tr('dl.csv')}</button></div>`;
   }
 
   function panelExport() {
     const d = DRONES[state.drone];
-    let html = `${field('Droon', selectIn('drone', Object.entries(DRONES).map(([k, x]) => [k, x.name]), state.drone))}`;
+    let html = `${field(tr('path.drone'), selectIn('drone', Object.entries(DRONES).map(([k, x]) => [k, x.name]), state.drone))}`;
     if (d.code) {
       html += `<h4>Python (CoDrone EDU)</h4>
-        <p class="note">Kood kasutab teeki <code>codrone_edu</code>. Droon lendab ilma pööramata, nina stardiplatsi noole suunas.</p>
+        <p class="note">${tr('ex.pyNote')}</p>
         <textarea class="code" readonly spellcheck="false">${esc(codroneCode())}</textarea>
-        <div class="row"><button data-act="copy-code">Kopeeri</button><button data-act="dl-code">Laadi alla .py</button></div>`;
+        <div class="row"><button data-act="copy-code">${tr('ex.copy')}</button><button data-act="dl-code">${tr('ex.dlPy')}</button></div>`;
     } else {
       const rows = flightPlan();
-      html += `<h4>Lennuplaan (DJI Neo 2)</h4>
-        <p class="note">DJI Neo 2 jaoks rakendus koodi ei koosta. Selle asemel saad lennuplaani piloodile ja kohtunikele: etapid, kaugused, suunad (0° = saali Y-telg) ja kõrgused.</p>
-        ${rows.length ? `<table class="plan"><thead><tr><th>#</th><th>Etapp</th><th>Tegevus</th><th class="num">m</th><th class="num">°</th><th class="num">h</th></tr></thead><tbody>
+      html += `<h4>${tr('ex.plan')} (DJI Neo 2)</h4>
+        <p class="note">${tr('ex.planNote')}</p>
+        ${rows.length ? `<table class="plan"><thead><tr><th>#</th><th>${tr('ex.stage')}</th><th>${tr('ex.action')}</th><th class="num">m</th><th class="num">°</th><th class="num">h</th></tr></thead><tbody>
         ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.label.replace(/^\d+\.\s*/, ''))}</td><td>${esc(r.act)}</td><td class="num">${num(r.dist, 1)}</td><td class="num">${r.hdg == null ? '' : Math.round(r.hdg)}</td><td class="num">${num(r.z, 1)}</td></tr>`).join('')}
-        </tbody></table>` : '<div class="empty">Lennurada puudub.</div>'}
-        <div class="row"><button data-act="dl-csv">Laadi alla CSV</button></div>`;
+        </tbody></table>` : `<div class="empty">${tr('ex.noPath')}</div>`}
+        <div class="row"><button data-act="dl-csv">${tr('dl.csv')}</button></div>`;
     }
-    html += `<h4>Rada</h4><div class="row"><button data-act="save">Salvesta loendisse</button><button data-act="download">Laadi alla .json</button><button data-act="png">Salvesta pilt</button><button data-act="print">Prindi</button></div>`;
+    html += `<h4>${tr('ex.track')}</h4><div class="row"><button data-act="save">${tr('ex.saveList')}</button><button data-act="download">${tr('ex.dlJson')}</button><button data-act="png">${tr('ex.png')}</button><button data-act="print">${tr('ex.print')}</button></div>`;
     const lib = loadLib();
-    html += '<h4>Minu rajad</h4>' + (lib.length
+    html += `<h4>${tr('tracks.mine')}</h4>` + (lib.length
       ? '<ol class="wp-list">' + lib.map((r, i) => `<li class="${r.name === state.name ? 'on' : ''}">
-          <span class="wp-text">${esc(r.name)}<small>${dateStr(r.saved)} · ${r.data.elements.length} elementi · ${money(trackPrice(r.data))}</small></span>
-          <button data-act="lib-open" data-i="${i}">Ava</button>
-          <button data-act="lib-del" data-i="${i}" class="danger" title="Kustuta loendist">✕</button></li>`).join('') + '</ol>'
-      : '<div class="empty">Salvestatud radu pole. Vajuta ülal „Salvesta“.</div>') +
-      '<p class="note">Rajad salvestatakse selle arvuti brauserisse. Teise arvutisse viimiseks vali „Laadi alla .json“ ja ava fail seal nupuga „Ava fail…“.</p>' +
-      `<h4>Juhendajale</h4>
-      <p class="note">Et rada ilmuks kõigile rühmas „Juhendaja rajad“, vali „Laadi alla .json“, kopeeri fail repo kausta <code>rajaplaneerija/rajad/</code> ja lae see GitHubi.</p>`;
+          <span class="wp-text">${esc(r.name)}<small>${dateStr(r.saved)} · ${tr('ex.elements', { n: r.data.elements.length })} · ${money(trackPrice(r.data))}</small></span>
+          <button data-act="lib-open" data-i="${i}">${tr('ex.open')}</button>
+          <button data-act="lib-del" data-i="${i}" class="danger" title="${tr('ex.libDel')}">✕</button></li>`).join('') + '</ol>'
+      : `<div class="empty">${tr('ex.libEmpty')}</div>`) +
+      `<p class="note">${tr('ex.libNote')}</p>
+      <h4>${tr('ex.instr')}</h4>
+      <p class="note">${tr('ex.instrNote')}</p>`;
     return html;
   }
 
@@ -1320,12 +1322,12 @@
         case 'wp-up': moveWp(i, -1); break;
         case 'wp-down': moveWp(i, 1); break;
         case 'wp-del': deleteWp(i); break;
-        case 'path-clear': if (confirm('Kas tühjendada kogu lennurada?')) { checkpoint(); state.path = []; ui.wp = null; invalidate(); renderPanel(); } break;
+        case 'path-clear': if (confirm(tr('msg.clearConfirm'))) { checkpoint(); state.path = []; ui.wp = null; invalidate(); renderPanel(); } break;
         case 'path-rev': checkpoint(); state.path.reverse(); state.path.forEach(w => { if (w.side) w.side = w.side === 'left' ? 'right' : 'left'; }); invalidate(); renderPanel(); break;
-        case 'copy-code': navigator.clipboard.writeText(codroneCode()).then(() => { act.textContent = 'Kopeeritud ✓'; }); break;
+        case 'copy-code': navigator.clipboard.writeText(codroneCode()).then(() => { act.textContent = tr('ex.copied'); }); break;
         case 'dl-code': download(fileBase() + '.py', codroneCode(), 'text/x-python'); break;
-        case 'dl-csv': download(fileBase() + '-lennuplaan.csv', '﻿' + planCsv(), 'text/csv'); break;
-        case 'mat-csv': download(fileBase() + '-materjalid.csv', '﻿' + materialsCsv(), 'text/csv'); break;
+        case 'dl-csv': download(fileBase() + '-' + tr('file.plan') + '.csv', '﻿' + planCsv(), 'text/csv'); break;
+        case 'mat-csv': download(fileBase() + '-' + tr('file.mat') + '.csv', '﻿' + materialsCsv(), 'text/csv'); break;
         case 'save': saveToLib(); break;
         case 'download': saveFile(); break;
         case 'lib-open': openFromLib(i); break;
@@ -1347,9 +1349,10 @@
     const b = e.target.closest('button');
     if (!b) return;
     if (b.dataset.mode) { setMode(b.dataset.mode); return; }
+    if (b.dataset.lang) { setLang(b.dataset.lang); return; }
     switch (b.dataset.act) {
       case 'new':
-        if (state.elements.length && !confirm('Kas alustada uut tühja rada? Praegune rada asendatakse.')) return;
+        if (state.elements.length && !confirm(tr('msg.newConfirm'))) return;
         checkpoint(); state = Object.assign(defaultState(), { drone: state.drone }); ui.sel = null; ui.wp = null; afterLoad(); fitView(); requestRender(); break;
       case 'open': $('#fileIn').click(); break;
       case 'save': saveToLib(); break;
@@ -1365,7 +1368,7 @@
   });
   $('#fileIn').addEventListener('change', e => { if (e.target.files[0]) openFile(e.target.files[0]); e.target.value = ''; });
   $('#speedSel').addEventListener('change', e => { anim.mult = +e.target.value; });
-  $('#trackName').addEventListener('change', e => { checkpoint(); state.name = e.target.value.trim() || 'Nimetu rada'; save(); });
+  $('#trackName').addEventListener('change', e => { checkpoint(); state.name = e.target.value.trim() || tr('track.untitled'); save(); });
   const tsel = $('#templateSel');
   fillTrackSelect();
   loadInstructorTracks();
@@ -1373,17 +1376,17 @@
     const [kind, i] = tsel.value.split(':');
     tsel.value = '';
     if (kind === 'm') { openFromLib(+i); return; }
-    if (kind === 'j') { const r = instructorTracks()[+i]; if (r) openState(r, r.name || 'Juhendaja rada'); return; }
+    if (kind === 'j') { const r = instructorTracks()[+i]; if (r) openState(r, r.name || tr('track.instructor')); return; }
     const t = TEMPLATES[+i];
     if (kind !== 't' || !t) return;
-    if (state.elements.length && !confirm(`Kas laadida ${t.name}? Praegune rada asendatakse (Ctrl+Z toob tagasi).`)) return;
+    if (state.elements.length && !confirm(tr('msg.loadConfirm', { name: t.name }))) return;
     checkpoint(); loadTemplate(t); ui.sel = null; ui.wp = null; afterLoad(); fitView(); requestRender();
   });
 
   // ---------- palett ----------
   function renderPalette() {
-    $('#palette').innerHTML = GROUPS.map(g => `<h3>${g}</h3><div class="pal-grid">${Object.entries(TYPES).filter(([, t]) => t.group === g).map(([k, t]) =>
-      `<button class="pal-item" draggable="true" data-type="${k}" title="${esc(t.name)} (${esc(t.en)}) – lohista saali või klõpsa"><img src="../assets/track/${t.icon}" alt=""><span>${esc(t.name)}</span></button>`).join('')}</div>`).join('');
+    $('#palette').innerHTML = GROUPS.map(g => `<h3>${groupName(g)}</h3><div class="pal-grid">${Object.entries(TYPES).filter(([, t]) => t.group === g).map(([k, t]) =>
+      `<button class="pal-item" draggable="true" data-type="${k}" title="${esc(tr('palette.item.t', { name: typeName(t), en: t.en }))}"><img src="../assets/track/${t.icon}" alt=""><span>${esc(typeName(t))}</span></button>`).join('')}</div>`).join('');
   }
   $('#palette').addEventListener('dragstart', e => {
     const b = e.target.closest('[data-type]');
@@ -1399,6 +1402,26 @@
     const [x, y] = freeSpot();
     addElement(b.dataset.type, x, y);
   });
+
+  // ---------- keel ----------
+  // Staatilised tekstid on HTML-is atribuutidega data-i18n (sisu), data-i18n-title ja data-i18n-aria
+  function applyLang() {
+    document.documentElement.lang = LANG;
+    document.title = tr('app.title');
+    document.querySelectorAll('[data-i18n]').forEach(n => { n.textContent = tr(n.dataset.i18n); });
+    document.querySelectorAll('[data-i18n-title]').forEach(n => { n.title = tr(n.dataset.i18nTitle); });
+    document.querySelectorAll('[data-i18n-aria]').forEach(n => n.setAttribute('aria-label', tr(n.dataset.i18nAria)));
+    document.querySelectorAll('#langSeg button').forEach(b => b.classList.toggle('on', b.dataset.lang === LANG));
+    $('#playBtn').textContent = tr(anim.playing ? 'btn.stop' : 'btn.play');
+    $('#topBtn').textContent = tr(view.pitch > 80 ? 'btn.top25' : 'btn.top');
+  }
+  function setLang(l) {
+    if (!I18N[l] || l === LANG) return;
+    LANG = l;
+    try { localStorage.setItem(LANG_KEY, l); } catch (e) { /* salvestus pole saadaval */ }
+    applyLang(); renderPalette(); fillTrackSelect(); updateHint();
+    invalidate(); renderPanel();
+  }
 
   // ---------- suurus ja käivitus ----------
   function resize() {
@@ -1416,6 +1439,7 @@
   if (!state) { state = defaultState(); loadTemplate(TEMPLATES[0]); }
   state.elements = state.elements.filter(e => TYPES[e.type]);
   $('#trackName').value = state.name;
+  applyLang();
   renderPalette();
   setMode('build');
   window.addEventListener('resize', resize);

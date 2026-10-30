@@ -50,6 +50,8 @@ button:disabled { opacity: .45; cursor: default; }
 .seg button { border: 0; border-radius: 0; padding: 6px 14px; }
 .seg button + button { border-left: 1px solid var(--line-strong); }
 .seg button.on { background: var(--accent); color: #fff; }
+.seg.lang { margin-left: auto; }
+.seg.lang button { padding: 6px 9px; font-size: 12px; font-weight: 600; }
 
 /* Põhipaigutus */
 .layout { flex: 1; display: grid; grid-template-columns: 196px 1fr 360px; min-height: 0; }
