@@ -300,6 +300,40 @@
     return ins;
   }
 
+  // Kattumise keeld: element ei tohi uues asendis katta ühtegi elementi, mida ta varem ei katnud
+  // (nii saab juba kattuvaid elemente vanadest radadest siiski lahti lohistada).
+  function covered(el) {
+    const fp = footprint(el, 0.05);
+    return state.elements.filter(o => o !== el && o.id !== el.id && overlap(fp, footprint(o, 0.05))).map(o => o.id);
+  }
+  function tryMove(el, change) {
+    const old = { x: el.x, y: el.y, rot: el.rot, v: el.v, z: el.z }, before = covered(el);
+    change(el);
+    if (covered(el).every(id => before.includes(id))) return true;
+    Object.assign(el, old);
+    if (old.z === undefined) delete el.z;
+    notice(tr('msg.occupied'));
+    return false;
+  }
+  function placeFree(el) {
+    const g = state.hall.grid || 0.25, { w, l } = state.hall, x0 = el.x, y0 = el.y;
+    for (let r = 0; r <= 60; r++) for (let i = -r; i <= r; i++) for (const j of r ? [-r, r] : [0]) {
+      for (const [dx, dy] of [[i, j], [j, i]]) {
+        el.x = snap(x0 + dx * g); el.y = snap(y0 + dy * g);
+        if (el.x < 0 || el.y < 0 || el.x > w || el.y > l) continue;
+        if (!covered(el).length) return true;
+      }
+    }
+    return false;
+  }
+  let noticeT = 0;
+  function notice(msg) {
+    const h = $('#hint');
+    h.textContent = msg; h.classList.add('warn');
+    clearTimeout(noticeT);
+    noticeT = setTimeout(() => { h.classList.remove('warn'); updateHint(); }, 2500);
+  }
+
   function validate() {
     const out = [], { w, l, h } = state.hall, drone = DRONES[state.drone];
     const els = state.elements, fps = els.map(e => footprint(e, 0.05));
@@ -638,6 +672,7 @@
     checkpoint();
     const el = { id: uid(), type, v: t.defaultV || 0, x: snap(x), y: snap(y), rot: 0 };
     el.x = clamp(el.x, 0, state.hall.w); el.y = clamp(el.y, 0, state.hall.l);
+    if (!placeFree(el)) { undoS.pop(); notice(tr('msg.noSpace')); return; }
     state.elements.push(el);
     ui.sel = el.id;
     if (ui.mode === 'build') ui.tab = 'props';
@@ -666,6 +701,7 @@
     if (!el) return;
     checkpoint();
     const c = Object.assign({}, el, { id: uid(), x: clamp(el.x + 1, 0, state.hall.w), y: clamp(el.y + 1, 0, state.hall.l) });
+    if (!placeFree(c)) { undoS.pop(); notice(tr('msg.noSpace')); return; }
     state.elements.push(c);
     ui.sel = c.id;
     invalidate(); renderPanel();
@@ -674,7 +710,7 @@
     const el = ui.sel && byId(ui.sel);
     if (!el) return;
     checkpoint();
-    el.rot = ((el.rot + deg + 540) % 360) - 180;
+    if (!tryMove(el, e => { e.rot = ((e.rot + deg + 540) % 360) - 180; })) { undoS.pop(); return; }
     invalidate(); renderPanel();
   }
   function nudge(dx, dy) {
@@ -682,8 +718,10 @@
     if (!el) return;
     checkpoint();
     const g = state.hall.grid || 0.1;
-    el.x = clamp(+(el.x + dx * g).toFixed(2), 0, state.hall.w);
-    el.y = clamp(+(el.y + dy * g).toFixed(2), 0, state.hall.l);
+    if (!tryMove(el, e => {
+      e.x = clamp(+(e.x + dx * g).toFixed(2), 0, state.hall.w);
+      e.y = clamp(+(e.y + dy * g).toFixed(2), 0, state.hall.l);
+    })) { undoS.pop(); return; }
     invalidate(); renderPanel();
   }
 
@@ -801,9 +839,8 @@
     const g = ground(mx, my), el = drag.el;
     const nx = clamp(snap(drag.ox + g[0] - drag.start[0], e.shiftKey), 0, state.hall.w);
     const ny = clamp(snap(drag.oy + g[1] - drag.start[1], e.shiftKey), 0, state.hall.l);
-    if (nx !== el.x || ny !== el.y) {
+    if ((nx !== el.x || ny !== el.y) && tryMove(el, e => { e.x = nx; e.y = ny; })) {
       if (!drag.moved) { undoS.push(drag.snap); redoS = []; drag.moved = true; }
-      el.x = nx; el.y = ny;
       flight = computePath();
       requestRender();
     }
@@ -1244,11 +1281,13 @@
       else state.hall[b] = clamp(val, b === 'h' ? 2 : 4, b === 'h' ? 15 : 60);
       if (b !== 'h' && b !== 'grid') { fitView(); }
     } else if (a === 'el' && el) {
-      if (b === 'v') { el.v = +val; delete el.z; }
-      else if (b === 'rot') el.rot = val;
-      else if (b === 'x') el.x = clamp(val, 0, state.hall.w);
-      else if (b === 'y') el.y = clamp(val, 0, state.hall.l);
-      else if (b === 'z') el.z = val;
+      return tryMove(el, el => {
+        if (b === 'v') { el.v = +val; delete el.z; }
+        else if (b === 'rot') el.rot = val;
+        else if (b === 'x') el.x = clamp(val, 0, state.hall.w);
+        else if (b === 'y') el.y = clamp(val, 0, state.hall.l);
+        else if (b === 'z') el.z = val;
+      });
     } else if (a === 'wp' && wp) {
       wp[b] = ['opening', 'x', 'y', 'z', 'r', 'hover'].includes(b) ? +val : val;
     } else if (k === 'cruise') state.cruise = val;
@@ -1261,7 +1300,7 @@
     const val = t.type === 'number' || t.type === 'range' ? parseFloat(t.value) : t.value;
     if ((t.type === 'number' || t.type === 'range') && !isFinite(val)) return;
     beginEdit();
-    applyField(k, val);
+    if (applyField(k, val) === false) { if (commit) { endEdit(); renderPanel(); } return; }
     const out = panelBody.querySelector(`[data-out="${k}"]`);
     if (out) out.textContent = num(val, 2) + (k.endsWith('rot') ? '°' : k.endsWith('hover') ? ' s' : ' m');
     invalidate();

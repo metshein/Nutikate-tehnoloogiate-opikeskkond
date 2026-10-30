@@ -92,6 +92,8 @@ const I18N = {
     'chk.ok': 'Probleeme ei leitud.',
     'chk.note': 'Klõps teatel valib vastava elemendi.',
 
+    'msg.occupied': 'Seal on juba teine element – elemendid ei tohi kattuda.',
+    'msg.noSpace': 'Saalis pole selle elemendi jaoks enam vaba ruumi.',
     'msg.noStorage': 'Brauser ei luba radu salvestada. Kasuta „Laadi alla .json“.',
     'msg.invalid': 'Rada „{name}“ on vigane.',
     'msg.openConfirm': 'Kas avada „{name}“? Praegune rada asendatakse (Ctrl+Z toob tagasi).',
@@ -282,6 +284,8 @@ const I18N = {
     'chk.ok': 'No problems found.',
     'chk.note': 'Click a message to select its element.',
 
+    'msg.occupied': 'Another element is already there – elements must not overlap.',
+    'msg.noSpace': 'There is no free space left in the hall for this element.',
     'msg.noStorage': 'The browser does not allow saving tracks. Use “Download .json”.',
     'msg.invalid': 'Track “{name}” is invalid.',
     'msg.openConfirm': 'Open “{name}”? The current track will be replaced (Ctrl+Z brings it back).',
