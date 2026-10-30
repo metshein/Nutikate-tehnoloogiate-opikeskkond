@@ -949,11 +949,20 @@
     saveLib(lib); fillTrackSelect(); renderPanel();
   }
   const dateStr = t => new Date(t).toLocaleString('et-EE', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  // Raja elementide hind kataloogi järgi (ainult komplektis müüdavad elemendid jäävad välja)
+  function trackPrice(data) {
+    let sum = 0;
+    for (const el of data.elements || []) {
+      const t = TYPES[el.type], v = t && (t.variants[el.v] || t.variants[0]);
+      if (v && v.price != null) sum += v.price;
+    }
+    return sum;
+  }
   function fillTrackSelect() {
     const lib = loadLib(), ins = instructorTracks();
     tsel.innerHTML = '<option value="">Rajad…</option>' +
-      (lib.length ? `<optgroup label="Minu rajad">${lib.map((r, i) => `<option value="m:${i}">${esc(r.name)} · ${dateStr(r.saved)}</option>`).join('')}</optgroup>` : '') +
-      (ins.length ? `<optgroup label="Juhendaja rajad">${ins.map((r, i) => `<option value="j:${i}">${esc(r.name || 'Rada ' + (i + 1))}</option>`).join('')}</optgroup>` : '') +
+      (lib.length ? `<optgroup label="Minu rajad">${lib.map((r, i) => `<option value="m:${i}">${esc(r.name)} (${money(trackPrice(r.data))})</option>`).join('')}</optgroup>` : '') +
+      (ins.length ? `<optgroup label="Juhendaja rajad">${ins.map((r, i) => `<option value="j:${i}">${esc(r.name || 'Rada ' + (i + 1))} (${money(trackPrice(r))})</option>`).join('')}</optgroup>` : '') +
       `<optgroup label="Kataloogi komplektid">${TEMPLATES.map((t, i) => `<option value="t:${i}">${esc(t.name)} (${money(t.price)})</option>`).join('')}</optgroup>`;
   }
   function openFile(file) {
@@ -1209,7 +1218,7 @@
     const lib = loadLib();
     html += '<h4>Minu rajad</h4>' + (lib.length
       ? '<ol class="wp-list">' + lib.map((r, i) => `<li class="${r.name === state.name ? 'on' : ''}">
-          <span class="wp-text">${esc(r.name)}<small>${dateStr(r.saved)} · ${r.data.elements.length} elementi</small></span>
+          <span class="wp-text">${esc(r.name)}<small>${dateStr(r.saved)} · ${r.data.elements.length} elementi · ${money(trackPrice(r.data))}</small></span>
           <button data-act="lib-open" data-i="${i}">Ava</button>
           <button data-act="lib-del" data-i="${i}" class="danger" title="Kustuta loendist">✕</button></li>`).join('') + '</ol>'
       : '<div class="empty">Salvestatud radu pole. Vajuta ülal „Salvesta“.</div>') +
