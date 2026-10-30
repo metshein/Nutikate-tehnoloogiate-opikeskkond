@@ -35,6 +35,10 @@ jobs:
             console.log('Juhendaja radu:', files.length, files);
           "
 
+      # Brauser ei tohi pärast uuendust vana koodi vahemälust kasutada
+      - name: Lisa failidele versioon
+        run: sed -i "s/?v=dev/?v=${GITHUB_SHA::7}/g" rajaplaneerija/index.html
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
