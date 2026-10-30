@@ -1,0 +1,45 @@
+# Avaldab repo GitHub Pagesis. Enne avaldamist koostab kausta rajaplaneerija/rajad/
+# JSON-failidest nimekirja index.json, et juhendaja rajad ilmuksid rakenduses loendisse.
+name: Avalda veebis
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Koosta juhendaja radade nimekiri
+        run: |
+          node -e "
+            const fs = require('fs'), dir = 'rajaplaneerija/rajad';
+            const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.toLowerCase().endsWith('.json') && f !== 'index.json').sort() : [];
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(dir + '/index.json', JSON.stringify(files, null, 2));
+            console.log('Juhendaja radu:', files.length, files);
+          "
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

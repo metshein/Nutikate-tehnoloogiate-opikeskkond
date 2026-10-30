@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="et">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Droonirajaplaneerija</title>
+  <link rel="icon" href="../assets/track/ring.svg">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="../assets/track/ring.svg" alt="" width="26" height="26">
+      <input id="trackName" class="name-input" aria-label="Raja nimi" spellcheck="false">
+    </div>
+
+    <div class="tb-group">
+      <button data-act="new" title="Uus tühi rada">Uus</button>
+      <button data-act="open" title="Ava rajafail (.json) arvutist">Ava fail…</button>
+      <button data-act="save" title="Salvesta rada loendisse „Minu rajad“ (Ctrl+S)">Salvesta</button>
+      <select id="templateSel" title="Ava salvestatud rada või kataloogi komplekt"><option value="">Rajad…</option></select>
+    </div>
+
+    <div class="seg" id="modeSeg" role="group" aria-label="Režiim">
+      <button data-mode="build" title="Paiguta ja liiguta elemente (B)">Ehita</button>
+      <button data-mode="path" title="Klõpsa elemente lennujärjekorras (L)">Lennurada</button>
+    </div>
+
+    <div class="tb-group">
+      <button data-act="undo" class="icon" title="Võta tagasi (Ctrl+Z)">↶</button>
+      <button data-act="redo" class="icon" title="Tee uuesti (Ctrl+Y)">↷</button>
+    </div>
+
+    <div class="tb-group">
+      <button data-act="rotL" class="icon" title="Pööra vaadet vasakule ( [ )">⟲</button>
+      <button data-act="rotR" class="icon" title="Pööra vaadet paremale ( ] )">⟳</button>
+      <button data-act="top" id="topBtn" title="Pealtvaade / 2,5D (T)">Pealt</button>
+      <button data-act="fit" title="Mahuta saal ekraanile (F)">Mahuta</button>
+    </div>
+
+    <div class="tb-group">
+      <button data-act="play" id="playBtn" class="primary" title="Esita lend (P)">▶ Esita</button>
+      <select id="speedSel" title="Animatsiooni kiirus">
+        <option value="1">×1</option><option value="2">×2</option><option value="4">×4</option>
+      </select>
+    </div>
+
+    <button data-act="png" title="Salvesta pilt (PNG)">PNG</button>
+  </header>
+
+  <main class="layout">
+    <aside class="palette" id="palette" aria-label="Rajaelemendid"></aside>
+
+    <section class="stage">
+      <div class="canvas-wrap">
+        <canvas id="scene" tabindex="0" aria-label="Droonirada 2,5D-vaates"></canvas>
+        <div class="hint" id="hint"></div>
+      </div>
+      <div class="profile-wrap">
+        <canvas id="profile" aria-label="Lennukõrguse profiil"></canvas>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <nav class="tabs" id="tabs">
+        <button data-tab="props">Omadused</button>
+        <button data-tab="path">Lennurada</button>
+        <button data-tab="check">Kontroll <span class="badge" id="checkBadge"></span></button>
+        <button data-tab="mat">Materjalid</button>
+        <button data-tab="export">Eksport</button>
+      </nav>
+      <div class="panel-body" id="panelBody"></div>
+    </aside>
+  </main>
+
+  <input type="file" id="fileIn" accept=".json,application/json" hidden>
+
+  <script src="js/elements.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

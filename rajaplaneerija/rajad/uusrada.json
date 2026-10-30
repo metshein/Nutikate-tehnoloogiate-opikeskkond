@@ -1,0 +1,176 @@
+{
+  "name": "DK-Track-01uus",
+  "hall": {
+    "w": 20,
+    "l": 10,
+    "h": 5,
+    "grid": 0.5
+  },
+  "drone": "codrone",
+  "cruise": 1,
+  "elements": [
+    {
+      "id": "j1ew3y3",
+      "type": "pad",
+      "v": 1,
+      "x": 2,
+      "y": 6,
+      "rot": 0
+    },
+    {
+      "id": "0t8p721",
+      "type": "ring",
+      "v": 3,
+      "x": 5.5,
+      "y": 7.5,
+      "rot": -90
+    },
+    {
+      "id": "ct6257a",
+      "type": "tunnel",
+      "v": 0,
+      "x": 9,
+      "y": 6,
+      "rot": -90
+    },
+    {
+      "id": "wan26wx",
+      "type": "flag",
+      "v": 1,
+      "x": 17,
+      "y": 6,
+      "rot": 0
+    },
+    {
+      "id": "kufpo3k",
+      "type": "ring",
+      "v": 3,
+      "x": 13,
+      "y": 3,
+      "rot": 90
+    },
+    {
+      "id": "2tyqfx3",
+      "type": "arch",
+      "v": 0,
+      "x": 9.5,
+      "y": 3,
+      "rot": 90
+    },
+    {
+      "id": "x5h54fs",
+      "type": "flag",
+      "v": 1,
+      "x": 7,
+      "y": 3,
+      "rot": 0
+    },
+    {
+      "id": "tjgryas",
+      "type": "flag",
+      "v": 1,
+      "x": 5.5,
+      "y": 3,
+      "rot": 0
+    },
+    {
+      "id": "ydphyie",
+      "type": "flag",
+      "v": 1,
+      "x": 4,
+      "y": 3,
+      "rot": 0
+    },
+    {
+      "id": "1wphyle",
+      "type": "ring",
+      "v": 3,
+      "x": 12.5,
+      "y": 7,
+      "rot": -90
+    },
+    {
+      "id": "t1np16c",
+      "type": "groundTunnel",
+      "v": 0,
+      "x": 8.5,
+      "y": 2,
+      "rot": 0
+    }
+  ],
+  "path": [
+    {
+      "id": "rxdaphb",
+      "el": "j1ew3y3",
+      "hover": 0
+    },
+    {
+      "id": "e3jiri9",
+      "el": "0t8p721",
+      "opening": 0,
+      "dir": "auto",
+      "hover": 0
+    },
+    {
+      "id": "9zo9kvv",
+      "el": "ct6257a",
+      "opening": 0,
+      "dir": "auto",
+      "hover": 0
+    },
+    {
+      "id": "hxbq0pf",
+      "el": "1wphyle",
+      "opening": 0,
+      "dir": "auto",
+      "hover": 0
+    },
+    {
+      "id": "jfjsep7",
+      "el": "wan26wx",
+      "side": "right",
+      "turn": "uturn",
+      "hover": 0
+    },
+    {
+      "id": "uiviv0b",
+      "el": "kufpo3k",
+      "opening": 0,
+      "dir": "auto",
+      "hover": 0
+    },
+    {
+      "id": "e7shy2z",
+      "el": "2tyqfx3",
+      "opening": 0,
+      "dir": "auto",
+      "hover": 0
+    },
+    {
+      "id": "rmf5qgs",
+      "el": "x5h54fs",
+      "side": "right",
+      "turn": "pass",
+      "hover": 0
+    },
+    {
+      "id": "o6bgkzu",
+      "el": "tjgryas",
+      "side": "left",
+      "turn": "pass",
+      "hover": 0
+    },
+    {
+      "id": "38pl6k3",
+      "el": "ydphyie",
+      "side": "right",
+      "turn": "pass",
+      "hover": 0
+    },
+    {
+      "id": "ha13g71",
+      "el": "j1ew3y3",
+      "hover": 0
+    }
+  ]
+}

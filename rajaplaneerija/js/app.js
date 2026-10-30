@@ -1,0 +1,1416 @@
+'use strict';
+/* Droonirajaplaneerija: raja koostamine lohistades, lennutrajektoor, 2,5D-vaade ja eksport. */
+(function () {
+  const $ = (s, r) => (r || document).querySelector(s);
+  const rad = d => d * Math.PI / 180;
+  const uid = () => Math.random().toString(36).slice(2, 9);
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const num = (n, d = 2) => (+n.toFixed(d)).toString().replace('.', ',');
+  const money = n => '$' + n.toFixed(2);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+  const len3 = a => Math.hypot(a[0], a[1], a[2]);
+  const dist = (a, b) => len3(sub(a, b));
+
+  const DRONES = {
+    codrone: { name: 'CoDrone EDU', speed: 0.5, minGap: 0.4, takeoffZ: 0.8, code: true },
+    neo2: { name: 'DJI Neo 2', speed: 2.0, minGap: 0.6, takeoffZ: 1.2, code: false },
+  };
+  const STORE = 'droonirajaplaneerija.v1';
+  const LIB = 'droonirajaplaneerija.rajad';
+  const PATH_COLOR = '#7c3aed';
+  const TURN_LABEL = { pass: 'möödu', uturn: 'U-pööre', circle: 'täisring' };
+  const SIDE_LABEL = { left: 'vasakult', right: 'paremalt' };
+
+  const canvas = $('#scene'), ctx = canvas.getContext('2d');
+  const prof = $('#profile'), pctx = prof.getContext('2d');
+  const panelBody = $('#panelBody');
+
+  let state = null;
+  const ui = { mode: 'build', sel: null, wp: null, tab: 'props' };
+  const view = { yaw: -32, pitch: 36, scale: 40, panX: 0, panY: 0 };
+  const anim = { playing: false, s: 0, mult: 1, last: 0 };
+  let flight = null, issues = [], hits = [], badges = [];
+  let W = 0, H = 0, PW = 0, PH = 0, dpr = 1;
+  let undoS = [], redoS = [], editing = false;
+
+  // ---------- olek ----------
+  function defaultState() {
+    return { name: 'Uus rada', hall: { w: 20, l: 12, h: 5, grid: 0.5 }, drone: 'codrone', cruise: 1.0, elements: [], path: [] };
+  }
+  function byId(id) { return state.elements.find(e => e.id === id); }
+  function T(el) { return TYPES[el.type]; }
+  function V(el) { return T(el).variants[el.v] || T(el).variants[0]; }
+  function elZ(el) { return el.z != null ? el.z : V(el).z; }
+
+  function wpDefaults(kind) {
+    if (kind === 'pylon') return { side: 'left', turn: 'pass', hover: 0 };
+    if (kind === 'gate') return { opening: 0, dir: 'auto', hover: 0 };
+    return { hover: 0 };
+  }
+
+  function checkpoint() { undoS.push(JSON.stringify(state)); if (undoS.length > 150) undoS.shift(); redoS = []; }
+  function beginEdit() { if (!editing) { checkpoint(); editing = true; } }
+  function endEdit() { editing = false; }
+  function undo() { if (!undoS.length) return; redoS.push(JSON.stringify(state)); state = JSON.parse(undoS.pop()); afterLoad(); }
+  function redo() { if (!redoS.length) return; undoS.push(JSON.stringify(state)); state = JSON.parse(redoS.pop()); afterLoad(); }
+
+  function afterLoad() {
+    if (ui.sel && !byId(ui.sel)) ui.sel = null;
+    if (ui.wp != null && ui.wp >= state.path.length) ui.wp = null;
+    $('#trackName').value = state.name;
+    anim.s = Math.min(anim.s, 0);
+    invalidate();
+    renderPanel();
+  }
+
+  let saveTimer = 0;
+  function save() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { try { localStorage.setItem(STORE, JSON.stringify(state)); } catch (e) { /* salvestus pole saadaval */ } }, 300);
+  }
+
+  function loadTemplate(t) {
+    const ids = t.items.map(() => uid());
+    const s = defaultState();
+    s.name = t.name;
+    s.hall = Object.assign(s.hall, t.hall);
+    s.drone = state ? state.drone : s.drone;
+    s.elements = t.items.map(([type, v, x, y, rot], i) => ({ id: ids[i], type, v, x, y, rot: rot || 0 }));
+    s.path = t.path.map(([i, o]) => Object.assign({ id: uid(), el: ids[i] }, wpDefaults(TYPES[t.items[i][0]].kind), o || {}));
+    state = s;
+  }
+
+  // ---------- geomeetria maailmas ----------
+  function xf(el, p) {
+    const r = rad(el.rot), c = Math.cos(r), s = Math.sin(r);
+    return [el.x + p[0] * c - p[1] * s, el.y + p[0] * s + p[1] * c, p[2]];
+  }
+  function xd(el, d) {
+    const r = rad(el.rot), c = Math.cos(r), s = Math.sin(r);
+    return [d[0] * c - d[1] * s, d[0] * s + d[1] * c, d[2]];
+  }
+  function worldPrims(el) {
+    return T(el).geom(V(el), elZ(el)).map(p => p.k === 'l'
+      ? { k: 'l', a: xf(el, p.a), b: xf(el, p.b), c: p.c, w: p.w }
+      : { k: 'p', pts: p.pts.map(q => xf(el, q)), f: p.f, s: p.s });
+  }
+  function openings(el) { return T(el).openings(V(el), elZ(el)).map(o => Object.assign({}, o, { c: xf(el, o.c), dir: xd(el, o.dir) })); }
+  function footprint(el, shrink) {
+    const [hx, hy] = T(el).fp(V(el)), k = shrink || 0;
+    return [[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]].map(([x, y]) => xf(el, [x - Math.sign(x) * k, y - Math.sign(y) * k, 0]));
+  }
+  function topZ(el) {
+    let z = 0;
+    for (const p of T(el).geom(V(el), elZ(el))) for (const q of p.k === 'l' ? [p.a, p.b] : p.pts) z = Math.max(z, q[2]);
+    return z;
+  }
+  function snap(v, free) { const g = state.hall.grid; return free || !g ? Math.round(v * 100) / 100 : Math.round(v / g) * g; }
+
+  // ---------- projektsioon (2,5D) ----------
+  function proj(p) {
+    const x = p[0] - state.hall.w / 2, y = p[1] - state.hall.l / 2;
+    const c = Math.cos(rad(view.yaw)), s = Math.sin(rad(view.yaw));
+    const xr = x * c - y * s, yr = x * s + y * c;
+    const sp = Math.sin(rad(view.pitch)), cp = Math.cos(rad(view.pitch));
+    return [W / 2 + view.panX + xr * view.scale, H / 2 + view.panY - (yr * sp + p[2] * cp) * view.scale, -yr * cp + p[2] * sp];
+  }
+  function ground(sx, sy) {
+    const xr = (sx - W / 2 - view.panX) / view.scale;
+    const yr = -(sy - H / 2 - view.panY) / (view.scale * Math.sin(rad(view.pitch)));
+    const c = Math.cos(rad(view.yaw)), s = Math.sin(rad(view.yaw));
+    return [xr * c + yr * s + state.hall.w / 2, -xr * s + yr * c + state.hall.l / 2];
+  }
+  function fitView() {
+    const { w, l } = state.hall;
+    const keep = { scale: view.scale, panX: view.panX, panY: view.panY };
+    view.scale = 1; view.panX = 0; view.panY = 0;
+    const pts = [];
+    for (const z of [0, 2.2]) for (const [x, y] of [[0, 0], [w, 0], [w, l], [0, l]]) pts.push(proj([x, y, z]));
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
+    if (!W || !H || !bw) { Object.assign(view, keep); return; }
+    const k = Math.min((W - 60) / bw, (H - 70) / bh);
+    view.scale = k;
+    view.panX = -((Math.max(...xs) + Math.min(...xs)) / 2 - W / 2) * k;
+    view.panY = -((Math.max(...ys) + Math.min(...ys)) / 2 - H / 2) * k + 8;
+  }
+
+  // ---------- lennutrajektoor ----------
+  function wpLabel(wp, i) {
+    if (!wp.el) return `${i + 1}. Vaba punkt`;
+    const el = byId(wp.el);
+    if (!el) return `${i + 1}. ?`;
+    const t = T(el), os = t.kind === 'gate' ? t.openings(V(el), elZ(el)) : [];
+    return `${i + 1}. ${t.name}${os.length > 1 ? ' – ' + os[Math.min(wp.opening || 0, os.length - 1)].name.toLowerCase() : ''}`;
+  }
+  function wpAction(wp, i, n) {
+    if (!wp.el) return 'lenda punkti';
+    const el = byId(wp.el);
+    if (!el) return '';
+    const k = T(el).kind;
+    if (k === 'pad') return i === 0 ? 'õhkutõus' : i === n - 1 ? 'maandumine' : 'maandu ja tõuse';
+    if (k === 'pylon') return `${TURN_LABEL[wp.turn || 'pass']} ${SIDE_LABEL[wp.side || 'left']}`;
+    return 'läbi ava' + (wp.dir === 'rev' ? ' (vastassuunas)' : '');
+  }
+
+  function computePath() {
+    const wps = state.path.filter(wp => !wp.el || byId(wp.el));
+    const cruise = state.cruise, ctrl = [], ops = [], n = wps.length;
+    const push = (p, wp, mark) => ctrl.push({ p, wp, mark: mark || null });
+    const last = () => ctrl.length ? ctrl[ctrl.length - 1].p : null;
+    const anchorOf = wp => {
+      if (!wp) return null;
+      if (!wp.el) return [wp.x, wp.y, wp.z];
+      const el = byId(wp.el);
+      return [el.x, el.y, cruise];
+    };
+
+    wps.forEach((wp, i) => {
+      const idx = state.path.indexOf(wp), label = wpLabel(wp, idx), act = wpAction(wp, i, n);
+      const move = p => ops.push({ op: 'move', p, wp: idx, label, act });
+      if (!wp.el) {
+        const p = [wp.x, wp.y, wp.z];
+        if (i === 0) { push([p[0], p[1], 0], idx); ops.push({ op: 'takeoff', p, wp: idx, label, act: 'õhkutõus' }); }
+        push(p, idx, { wp: idx, kind: 'free', anchor: p });
+        move(p);
+      } else {
+        const el = byId(wp.el), t = T(el);
+        if (t.kind === 'pad') {
+          const g = [el.x, el.y, 0], up = [el.x, el.y, cruise], mark = { wp: idx, kind: 'pad', anchor: g };
+          if (i === 0) {
+            push(g, idx, mark); push(up, idx);
+            ops.push({ op: 'takeoff', p: g, wp: idx, label, act }); move(up);
+          } else if (i === n - 1) {
+            push(up, idx); push(g, idx, mark);
+            move(up); ops.push({ op: 'land', wp: idx, label, act });
+          } else {
+            push(up, idx); push(g, idx, mark); push(up, idx);
+            move(up); ops.push({ op: 'land', wp: idx, label, act });
+            ops.push({ op: 'wait', t: Math.max(2, wp.hover || 0), wp: idx, label, act: 'oota platsil' });
+            ops.push({ op: 'takeoff', p: g, wp: idx, label, act }); move(up);
+          }
+        } else if (t.kind === 'pylon') {
+          const h = wp.z != null ? wp.z : cruise, R = wp.r || 0.7, F = [el.x, el.y];
+          const P = last() || anchorOf(wps[i + 1]) || [el.x - 1, el.y, h];
+          const a = Math.atan2(P[1] - F[1], P[0] - F[0]), s = wp.side === 'right' ? -1 : 1;
+          const end = { pass: 135, uturn: 315, circle: 405 }[wp.turn || 'pass'];
+          const steps = Math.ceil((end - 45) / 30), mid = Math.round(steps / 2);
+          if (i === 0) {
+            const p0 = [F[0] + Math.cos(a + s * rad(45)) * R, F[1] + Math.sin(a + s * rad(45)) * R, 0];
+            push(p0, idx); ops.push({ op: 'takeoff', p: p0, wp: idx, label, act: 'õhkutõus' });
+          }
+          for (let k = 0; k <= steps; k++) {
+            const th = a + s * rad(45 + (end - 45) * k / steps);
+            const p = [F[0] + Math.cos(th) * R, F[1] + Math.sin(th) * R, h];
+            push(p, idx, k === mid ? { wp: idx, kind: 'flag', anchor: [el.x, el.y, V(el).h] } : null);
+            move(p);
+          }
+        } else {
+          const os = openings(el), o = os[Math.min(wp.opening || 0, os.length - 1)];
+          if (!o) return;
+          const d = Math.max(o.depth / 2 + 0.4, 0.6);
+          const A = sub(o.c, mul(o.dir, d)), B = add(o.c, mul(o.dir, d));
+          let flip = wp.dir === 'rev';
+          if (wp.dir !== 'fwd' && wp.dir !== 'rev' && o.dir[2] === 0) {
+            const P = last() || (i === 0 ? anchorOf(wps[i + 1]) : null);
+            if (P) flip = dist(P, B) < dist(P, A);
+          }
+          const [e1, e2] = flip ? [B, A] : [A, B];
+          if (i === 0) { push([e1[0], e1[1], 0], idx); ops.push({ op: 'takeoff', p: e1, wp: idx, label, act: 'õhkutõus' }); }
+          push(e1, idx);
+          push(o.c, idx, { wp: idx, kind: 'gate', anchor: o.c, o });
+          push(e2, idx);
+          move(e1); move(e2);
+        }
+      }
+      if (wp.hover > 0 && !(wp.el && T(byId(wp.el)).kind === 'pad' && i > 0 && i < n - 1)) {
+        ops.push({ op: 'wait', t: wp.hover, wp: idx, label, act: `hõlju ${num(wp.hover, 1)} s` });
+      }
+    });
+
+    if (ops.length && ops[ops.length - 1].op !== 'land') {
+      const p = last();
+      push([p[0], p[1], 0], ctrl[ctrl.length - 1].wp);
+      ops.push({ op: 'land', wp: ctrl[ctrl.length - 1].wp, label: 'Lõpp', act: 'maandumine' });
+    }
+
+    // Nurkade ümardamine – läbi avade jääb lend sirgeks
+    const pts = [];
+    if (ctrl.length) pts.push(ctrl[0]);
+    for (let i = 1; i < ctrl.length - 1; i++) {
+      const A = ctrl[i - 1].p, P = ctrl[i].p, B = ctrl[i + 1].p;
+      const la = dist(A, P), lb = dist(B, P);
+      if (la < 1e-6 || lb < 1e-6) { pts.push(ctrl[i]); continue; }
+      const u1 = mul(sub(A, P), 1 / la), u2 = mul(sub(B, P), 1 / lb);
+      if (u1[0] * u2[0] + u1[1] * u2[1] + u1[2] * u2[2] < -0.995) { pts.push(ctrl[i]); continue; }
+      const r = Math.min(0.45, la * 0.45, lb * 0.45), p0 = add(P, mul(u1, r)), p1 = add(P, mul(u2, r));
+      for (let k = 0; k <= 8; k++) {
+        const t = k / 8, q = add(add(mul(p0, (1 - t) * (1 - t)), mul(P, 2 * (1 - t) * t)), mul(p1, t * t));
+        pts.push({ p: q, wp: ctrl[i].wp, mark: k === 4 ? ctrl[i].mark : null });
+      }
+    }
+    if (ctrl.length > 1) pts.push(ctrl[ctrl.length - 1]);
+    let s = 0;
+    pts.forEach((q, i) => { if (i) s += dist(pts[i - 1].p, q.p); q.s = s; });
+    return { pts, ops, length: s, marks: pts.filter(q => q.mark) };
+  }
+
+  function flightTime() {
+    const d = DRONES[state.drone];
+    let t = flight.length / d.speed;
+    for (const o of flight.ops) t += o.op === 'wait' ? o.t : o.op === 'takeoff' || o.op === 'land' ? 3 : 0;
+    return t;
+  }
+
+  function sampleAt(s) {
+    const pts = flight.pts;
+    if (!pts.length) return null;
+    if (s <= 0) return { p: pts[0].p, dir: pts[1] ? sub(pts[1].p, pts[0].p) : [0, 1, 0] };
+    for (let i = 1; i < pts.length; i++) {
+      if (pts[i].s >= s) {
+        const a = pts[i - 1], b = pts[i], t = (s - a.s) / Math.max(1e-9, b.s - a.s);
+        return { p: add(a.p, mul(sub(b.p, a.p), t)), dir: sub(b.p, a.p) };
+      }
+    }
+    const L = pts[pts.length - 1];
+    return { p: L.p, dir: [0, 1, 0] };
+  }
+
+  // ---------- kontroll ----------
+  function overlap(a, b) {
+    for (const poly of [a, b]) for (let i = 0; i < 4; i++) {
+      const p = poly[i], q = poly[(i + 1) % 4], nx = q[1] - p[1], ny = p[0] - q[0];
+      let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+      for (const v of a) { const d = v[0] * nx + v[1] * ny; a0 = Math.min(a0, d); a1 = Math.max(a1, d); }
+      for (const v of b) { const d = v[0] * nx + v[1] * ny; b0 = Math.min(b0, d); b1 = Math.max(b1, d); }
+      if (a1 <= b0 || b1 <= a0) return false;
+    }
+    return true;
+  }
+  function inPoly(pt, poly) {
+    let ins = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi) ins = !ins;
+    }
+    return ins;
+  }
+
+  function validate() {
+    const out = [], { w, l, h } = state.hall, drone = DRONES[state.drone];
+    const els = state.elements, fps = els.map(e => footprint(e, 0.05));
+    els.forEach((el, i) => {
+      if (footprint(el).some(([x, y]) => x < -0.01 || y < -0.01 || x > w + 0.01 || y > l + 0.01))
+        out.push({ lvl: 'err', el: el.id, msg: `${T(el).name} ulatub saalist välja.` });
+      if (topZ(el) > h) out.push({ lvl: 'err', el: el.id, msg: `${T(el).name} on saali jaoks liiga kõrge (${num(topZ(el), 1)} m).` });
+      for (let j = i + 1; j < els.length; j++) {
+        if (overlap(fps[i], fps[j])) out.push({ lvl: 'warn', el: el.id, msg: `${T(el).name} ja ${T(els[j]).name.toLowerCase()} kattuvad.` });
+      }
+    });
+
+    const wps = state.path;
+    if (!wps.length) { out.push({ lvl: 'info', msg: 'Lennurada puudub. Vali „Lennurada“ ja klõpsa elemente lennujärjekorras.' }); return out; }
+    const first = wps[0].el && byId(wps[0].el), lastEl = wps[wps.length - 1].el && byId(wps[wps.length - 1].el);
+    if (!first || T(first).kind !== 'pad') out.push({ lvl: 'info', msg: 'Rada ei alga maandumisplatsilt.' });
+    if (!lastEl || T(lastEl).kind !== 'pad') out.push({ lvl: 'info', msg: 'Rada ei lõpe maandumisplatsil.' });
+
+    wps.forEach((wp, i) => {
+      const el = wp.el && byId(wp.el);
+      if (!el || T(el).kind !== 'gate') return;
+      const os = openings(el), o = os[Math.min(wp.opening || 0, os.length - 1)];
+      if (o && o.size < drone.minGap) out.push({ lvl: 'warn', el: el.id, msg: `${i + 1}. ${T(el).name}: ava ${Math.round(o.size * 100)} cm on drooni ${drone.name} jaoks kitsas.` });
+    });
+
+    let outside = false, ceiling = false;
+    const hitEls = new Set(), tops = new Map(els.map(e => [e.id, topZ(e)]));
+    const elFp = new Map(els.map((e, i) => [e.id, fps[i]]));
+    const near = i => [i - 1, i, i + 1].map(k => wps[k] && wps[k].el).filter(Boolean);
+    flight.pts.forEach(q => {
+      const [x, y, z] = q.p;
+      if (x < 0.2 || y < 0.2 || x > w - 0.2 || y > l - 0.2) outside = true;
+      if (z > h - 0.3) ceiling = true;
+      if (z < 0.15) return;
+      const skip = near(q.wp);
+      for (const el of els) {
+        if (hitEls.has(el.id) || skip.includes(el.id) || T(el).kind === 'pad') continue;
+        if (z < tops.get(el.id) + 0.1 && inPoly([x, y], elFp.get(el.id))) hitEls.add(el.id);
+      }
+    });
+    if (outside) out.push({ lvl: 'err', msg: 'Lennutrajektoor läheb seinale lähemale kui 20 cm.' });
+    if (ceiling) out.push({ lvl: 'err', msg: 'Lennutrajektoor läheb laele lähemale kui 30 cm.' });
+    for (const id of hitEls) out.push({ lvl: 'warn', el: id, msg: `Trajektoor läheb läbi elemendi ${T(byId(id)).name.toLowerCase()}. Kontrolli järjekorda või lisa vaba punkt.` });
+    return out;
+  }
+
+  // ---------- joonistamine ----------
+  let renderQueued = false;
+  function requestRender() { if (!renderQueued) { renderQueued = true; requestAnimationFrame(() => { renderQueued = false; render(); }); } }
+  function invalidate() {
+    flight = computePath();
+    issues = validate();
+    anim.s = Math.min(anim.s, flight.length);
+    const errs = issues.filter(i => i.lvl === 'err').length, warns = issues.filter(i => i.lvl === 'warn').length;
+    const b = $('#checkBadge');
+    b.textContent = errs + warns || '';
+    b.className = 'badge' + (errs ? ' err' : '');
+    save();
+    requestRender();
+  }
+
+  function polyPath(c, pts) { c.beginPath(); pts.forEach((p, i) => i ? c.lineTo(p[0], p[1]) : c.moveTo(p[0], p[1])); c.closePath(); }
+
+  function drawFloor() {
+    const { w, l, h, grid } = state.hall;
+    const corners = [[0, 0], [w, 0], [w, l], [0, l]];
+    // tagumised seinad annavad ruumitunde
+    if (view.pitch < 89) {
+      const cd = proj([w / 2, l / 2, 0])[2];
+      for (let i = 0; i < 4; i++) {
+        const a = corners[i], b = corners[(i + 1) % 4], m = proj([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 0]);
+        if (m[2] < cd) {
+          const q = [proj([a[0], a[1], 0]), proj([b[0], b[1], 0]), proj([b[0], b[1], h]), proj([a[0], a[1], h])];
+          polyPath(ctx, q); ctx.fillStyle = 'rgba(148,163,184,0.10)'; ctx.fill();
+          ctx.strokeStyle = 'rgba(148,163,184,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+        }
+      }
+    }
+    const fl = corners.map(([x, y]) => proj([x, y, 0]));
+    polyPath(ctx, fl); ctx.fillStyle = '#e9edf2'; ctx.fill();
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= w + 1e-6; x += grid) {
+      const major = Math.abs(x - Math.round(x)) < 1e-6;
+      ctx.strokeStyle = major ? '#cfd8e3' : '#dde4ec';
+      const a = proj([x, 0, 0]), b = proj([x, l, 0]); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    }
+    for (let y = 0; y <= l + 1e-6; y += grid) {
+      const major = Math.abs(y - Math.round(y)) < 1e-6;
+      ctx.strokeStyle = major ? '#cfd8e3' : '#dde4ec';
+      const a = proj([0, y, 0]), b = proj([w, y, 0]); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    }
+    polyPath(ctx, fl); ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.5; ctx.stroke();
+    // meetrite märgid
+    ctx.fillStyle = '#64748b'; ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const step = view.scale < 22 ? 4 : 2;
+    for (let x = 0; x <= w + 1e-6; x += step) { const p = proj([x, -0.45, 0]); ctx.fillText(x + ' m', p[0], p[1]); }
+    for (let y = step; y <= l + 1e-6; y += step) { const p = proj([-0.55, y, 0]); ctx.fillText(y + ' m', p[0], p[1]); }
+  }
+
+  function drawCompass() {
+    const o = proj([state.hall.w / 2, state.hall.l / 2, 0]), n = proj([state.hall.w / 2, state.hall.l / 2 + 1, 0]);
+    let dx = n[0] - o[0], dy = n[1] - o[1];
+    const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
+    const cx = W - 34, cy = 34;
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.strokeStyle = '#cbd5e1';
+    ctx.beginPath(); ctx.arc(cx, cy, 20, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#334155'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(cx - dx * 11, cy - dy * 11); ctx.lineTo(cx + dx * 11, cy + dy * 11); ctx.stroke();
+    ctx.fillStyle = '#334155';
+    ctx.beginPath(); ctx.moveTo(cx + dx * 13, cy + dy * 13); ctx.lineTo(cx + dx * 5 - dy * 5, cy + dy * 5 + dx * 5); ctx.lineTo(cx + dx * 5 + dy * 5, cy + dy * 5 - dx * 5); ctx.fill();
+    ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('Y', cx, cy + 30);
+    ctx.restore();
+  }
+
+  function itemFromPrim(p, sel) {
+    if (p.k === 'l') {
+      const a = proj(p.a), b = proj(p.b);
+      return { k: 'l', a, b, c: p.c, w: Math.max(1, p.w * view.scale), d: (a[2] + b[2]) / 2, sel };
+    }
+    const pts = p.pts.map(proj);
+    return { k: 'p', pts, f: p.f, s: p.s, d: pts.reduce((s, q) => s + q[2], 0) / pts.length, sel };
+  }
+
+  function drawItem(it) {
+    if (it.sel) { ctx.shadowColor = 'rgba(124,58,237,0.9)'; ctx.shadowBlur = 6; }
+    if (it.k === 'l') {
+      ctx.strokeStyle = it.c; ctx.lineWidth = it.w; ctx.lineCap = 'round';
+      ctx.setLineDash(it.dash || []);
+      ctx.beginPath(); ctx.moveTo(it.a[0], it.a[1]); ctx.lineTo(it.b[0], it.b[1]); ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (it.k === 'p') {
+      polyPath(ctx, it.pts);
+      if (it.f) { ctx.fillStyle = it.f; ctx.fill(); }
+      if (it.s) { ctx.strokeStyle = it.s; ctx.lineWidth = 1; ctx.stroke(); }
+    } else if (it.k === 'fn') it.fn();
+    ctx.shadowBlur = 0;
+  }
+
+  function arrowItems(a, b, color, items, width) {
+    const pa = proj(a), pb = proj(b);
+    items.push({ k: 'l', a: pa, b: pb, c: color, w: width || 2, d: Math.max(pa[2], pb[2]) + 0.01, dash: [5, 4] });
+    const dx = pb[0] - pa[0], dy = pb[1] - pa[1], L = Math.hypot(dx, dy);
+    if (L < 4) return;
+    const ux = dx / L, uy = dy / L;
+    items.push({ k: 'p', pts: [[pb[0], pb[1]], [pb[0] - ux * 10 - uy * 5, pb[1] - uy * 10 + ux * 5], [pb[0] - ux * 10 + uy * 5, pb[1] - uy * 10 - ux * 5]], f: color, d: pb[2] + 0.01 });
+  }
+
+  function render() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#f4f6f9'; ctx.fillRect(0, 0, W, H);
+    drawFloor();
+
+    const items = [];
+    hits = [];
+    const drone = anim.s > 0 || anim.playing ? sampleAt(anim.s) : null;
+
+    // põrandajäljed ja valiku märk
+    for (const el of state.elements) {
+      const fp = footprint(el).map(proj);
+      polyPath(ctx, fp); ctx.fillStyle = 'rgba(15,23,42,0.07)'; ctx.fill();
+      if (el.id === ui.sel) {
+        ctx.setLineDash([6, 4]); ctx.strokeStyle = PATH_COLOR; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
+      }
+    }
+    // trajektoori vari põrandal
+    if (flight.pts.length > 1) {
+      ctx.beginPath();
+      flight.pts.forEach((q, i) => { const p = proj([q.p[0], q.p[1], 0]); i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]); });
+      ctx.strokeStyle = 'rgba(124,58,237,0.22)'; ctx.lineWidth = 2; ctx.setLineDash([4, 4]); ctx.stroke(); ctx.setLineDash([]);
+    }
+    if (drone) {
+      const g = proj([drone.p[0], drone.p[1], 0]);
+      ctx.fillStyle = 'rgba(15,23,42,0.18)';
+      ctx.beginPath(); ctx.ellipse(g[0], g[1], 0.2 * view.scale, 0.2 * view.scale * Math.sin(rad(view.pitch)), 0, 0, Math.PI * 2); ctx.fill();
+    }
+
+    for (const el of state.elements) {
+      const sel = el.id === ui.sel, its = worldPrims(el).map(p => itemFromPrim(p, sel));
+      items.push(...its);
+      const c = proj([el.x, el.y, topZ(el) / 2]);
+      hits.push({ el, items: its, fp: footprint(el).map(proj), d: c[2] });
+      if (sel && T(el).kind === 'gate') {
+        const o = openings(el)[0];
+        arrowItems(sub(o.c, mul(o.dir, 0.8)), add(o.c, mul(o.dir, 0.8)), '#d97706', items, 2);
+      }
+      if (sel && T(el).kind === 'pad') {
+        const f = xd(el, [0, 1, 0]);
+        arrowItems([el.x, el.y, 0.02], [el.x + f[0] * 0.9, el.y + f[1] * 0.9, 0.02], '#d97706', items, 2);
+      }
+    }
+
+    // trajektoor
+    const pw = Math.max(2, 0.045 * view.scale);
+    for (let i = 1; i < flight.pts.length; i++) {
+      const a = proj(flight.pts[i - 1].p), b = proj(flight.pts[i].p);
+      items.push({ k: 'l', a, b, c: PATH_COLOR, w: pw, d: (a[2] + b[2]) / 2 });
+    }
+    for (let s = 0.9; s < flight.length - 0.3; s += 1.6) {
+      const q = sampleAt(s), L = len3(q.dir);
+      if (L < 1e-6) continue;
+      const u = mul(q.dir, 1 / L), side = [-u[1], u[0], 0], k = 0.13;
+      const tip = proj(add(q.p, mul(u, k))), l1 = proj(add(sub(q.p, mul(u, k)), mul(side, k))), r1 = proj(sub(sub(q.p, mul(u, k)), mul(side, k)));
+      items.push({ k: 'p', pts: [tip, l1, r1], f: PATH_COLOR, d: tip[2] + 0.001 });
+    }
+    if (drone) {
+      const p = drone.p, dp = proj(p);
+      items.push({ k: 'fn', d: dp[2] + 0.05, fn: () => drawDrone(p, drone.dir) });
+    }
+
+    items.sort((a, b) => a.d - b.d);
+    for (const it of items) drawItem(it);
+
+    // lennupunktide numbrid
+    badges = [];
+    ctx.font = 'bold 11px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const seen = new Set();
+    for (const m of flight.marks) {
+      if (seen.has(m.mark.wp)) continue;
+      seen.add(m.mark.wp);
+      const a = m.mark.anchor, p = proj(m.mark.kind === 'pad' ? a : [a[0], a[1], a[2] + (m.mark.kind === 'flag' ? 0.25 : 0)]);
+      const on = ui.wp === m.mark.wp, r = on ? 11 : 9;
+      ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
+      ctx.fillStyle = on ? '#f59e0b' : PATH_COLOR; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.fillText(String(m.mark.wp + 1), p[0], p[1] + 0.5);
+      badges.push({ wp: m.mark.wp, x: p[0], y: p[1] });
+    }
+    drawCompass();
+    drawProfile();
+  }
+
+  function drawDrone(p, dir) {
+    const L = Math.hypot(dir[0], dir[1]) || 1, f = [dir[0] / L, dir[1] / L], r = [f[1], -f[0]], a = 0.12;
+    const rotors = [[1, 1], [1, -1], [-1, -1], [-1, 1]].map(([i, j]) => [p[0] + (f[0] * i + r[0] * j) * a, p[1] + (f[1] * i + r[1] * j) * a, p[2]]);
+    const c = proj(p), g = proj([p[0], p[1], 0]);
+    ctx.save();
+    ctx.setLineDash([3, 3]); ctx.strokeStyle = 'rgba(15,23,42,0.35)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(c[0], c[1]); ctx.lineTo(g[0], g[1]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = '#0f172a'; ctx.lineWidth = Math.max(2, 0.03 * view.scale);
+    ctx.beginPath(); ctx.moveTo(...proj(rotors[0]).slice(0, 2)); ctx.lineTo(...proj(rotors[2]).slice(0, 2));
+    ctx.moveTo(...proj(rotors[1]).slice(0, 2)); ctx.lineTo(...proj(rotors[3]).slice(0, 2)); ctx.stroke();
+    rotors.forEach((q, i) => {
+      const s = proj(q);
+      ctx.beginPath(); ctx.ellipse(s[0], s[1], 0.07 * view.scale, 0.07 * view.scale * Math.max(0.35, Math.sin(rad(view.pitch))), 0, 0, Math.PI * 2);
+      ctx.fillStyle = i < 2 ? 'rgba(239,68,68,0.55)' : 'rgba(15,23,42,0.35)'; ctx.fill();
+      ctx.strokeStyle = '#0f172a'; ctx.lineWidth = 1; ctx.stroke();
+    });
+    ctx.fillStyle = '#f59e0b';
+    ctx.beginPath(); ctx.arc(c[0], c[1], Math.max(3, 0.035 * view.scale), 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // ---------- kõrgusprofiil ----------
+  function drawProfile() {
+    pctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    pctx.fillStyle = '#ffffff'; pctx.fillRect(0, 0, PW, PH);
+    pctx.font = '11px system-ui, sans-serif'; pctx.textBaseline = 'middle';
+    if (flight.length < 0.01) {
+      pctx.fillStyle = '#94a3b8'; pctx.textAlign = 'center';
+      pctx.fillText('Kõrgusprofiil ilmub siia, kui lennurada on koostatud.', PW / 2, PH / 2);
+      return;
+    }
+    const L = flight.length, zMax = Math.max(state.hall.h, 2.5), l0 = 40, r0 = 14, t0 = 16, b0 = 20;
+    const X = s => l0 + s / L * (PW - l0 - r0), Y = z => PH - b0 - z / zMax * (PH - t0 - b0);
+    pctx.strokeStyle = '#eef2f6'; pctx.lineWidth = 1; pctx.fillStyle = '#64748b'; pctx.textAlign = 'right';
+    for (let z = 0; z <= zMax + 1e-6; z += 0.5) {
+      pctx.beginPath(); pctx.moveTo(l0, Y(z)); pctx.lineTo(PW - r0, Y(z)); pctx.stroke();
+      if (Math.abs(z - Math.round(z)) < 1e-6) pctx.fillText(z + ' m', l0 - 5, Y(z));
+    }
+    const step = [1, 2, 5, 10, 20].find(k => L / k < 14) || 50;
+    pctx.textAlign = 'center';
+    for (let s = 0; s <= L; s += step) pctx.fillText(s + ' m', X(s), PH - 8);
+    // lagi
+    pctx.strokeStyle = '#dc2626'; pctx.setLineDash([5, 4]);
+    pctx.beginPath(); pctx.moveTo(l0, Y(state.hall.h)); pctx.lineTo(PW - r0, Y(state.hall.h)); pctx.stroke(); pctx.setLineDash([]);
+    // avade lubatud kõrgusvahemikud
+    const done = new Set();
+    for (const m of flight.marks) {
+      const k = m.mark, x = X(m.s);
+      if (k.kind === 'gate' && k.o.zMin != null) {
+        pctx.fillStyle = 'rgba(22,163,74,0.18)'; pctx.fillRect(x - 5, Y(k.o.zMax), 10, Y(k.o.zMin) - Y(k.o.zMax));
+        pctx.strokeStyle = '#16a34a'; pctx.lineWidth = 2;
+        pctx.beginPath(); pctx.moveTo(x - 7, Y(k.o.zMax)); pctx.lineTo(x + 7, Y(k.o.zMax)); pctx.moveTo(x - 7, Y(k.o.zMin)); pctx.lineTo(x + 7, Y(k.o.zMin)); pctx.stroke();
+      } else if (k.kind === 'gate') {
+        pctx.strokeStyle = '#16a34a'; pctx.lineWidth = 2;
+        pctx.beginPath(); pctx.moveTo(x - 9, Y(k.anchor[2])); pctx.lineTo(x + 9, Y(k.anchor[2])); pctx.stroke();
+      } else if (k.kind === 'flag') {
+        pctx.strokeStyle = '#2563eb'; pctx.lineWidth = 1.5;
+        pctx.beginPath(); pctx.moveTo(x, Y(0)); pctx.lineTo(x, Y(k.anchor[2])); pctx.stroke();
+      }
+      if (!done.has(k.wp)) {
+        done.add(k.wp);
+        pctx.fillStyle = ui.wp === k.wp ? '#f59e0b' : PATH_COLOR;
+        pctx.beginPath(); pctx.arc(x, 8, 7, 0, Math.PI * 2); pctx.fill();
+        pctx.fillStyle = '#fff'; pctx.font = 'bold 9px system-ui'; pctx.fillText(String(k.wp + 1), x, 8.5); pctx.font = '11px system-ui, sans-serif';
+      }
+    }
+    pctx.strokeStyle = PATH_COLOR; pctx.lineWidth = 2.2; pctx.lineJoin = 'round';
+    pctx.beginPath();
+    flight.pts.forEach((q, i) => i ? pctx.lineTo(X(q.s), Y(q.p[2])) : pctx.moveTo(X(q.s), Y(q.p[2])));
+    pctx.stroke();
+    if (anim.s > 0 || anim.playing) {
+      const q = sampleAt(anim.s);
+      pctx.strokeStyle = '#f59e0b'; pctx.lineWidth = 1.5;
+      pctx.beginPath(); pctx.moveTo(X(anim.s), t0); pctx.lineTo(X(anim.s), PH - b0); pctx.stroke();
+      pctx.fillStyle = '#f59e0b'; pctx.beginPath(); pctx.arc(X(anim.s), Y(q.p[2]), 4.5, 0, Math.PI * 2); pctx.fill();
+    }
+  }
+
+  // ---------- animatsioon ----------
+  function setPlaying(on) {
+    anim.playing = on;
+    $('#playBtn').textContent = on ? '■ Peata' : '▶ Esita';
+    if (on) {
+      if (anim.s >= flight.length - 1e-3) anim.s = 0;
+      anim.last = performance.now();
+      requestAnimationFrame(tick);
+    }
+    requestRender();
+  }
+  function tick(t) {
+    if (!anim.playing) return;
+    const dt = Math.min(0.1, (t - anim.last) / 1000);
+    anim.last = t;
+    anim.s += dt * DRONES[state.drone].speed * anim.mult;
+    if (anim.s >= flight.length) { anim.s = flight.length; setPlaying(false); }
+    render();
+    if (anim.playing) requestAnimationFrame(tick);
+  }
+
+  // ---------- elementide muutmine ----------
+  function addElement(type, x, y) {
+    const t = TYPES[type];
+    checkpoint();
+    const el = { id: uid(), type, v: t.defaultV || 0, x: snap(x), y: snap(y), rot: 0 };
+    el.x = clamp(el.x, 0, state.hall.w); el.y = clamp(el.y, 0, state.hall.l);
+    state.elements.push(el);
+    ui.sel = el.id;
+    if (ui.mode === 'build') ui.tab = 'props';
+    invalidate(); renderPanel();
+  }
+  function freeSpot() {
+    const { w, l } = state.hall;
+    for (let k = 0; k < 40; k++) {
+      const x = snap(w / 2 + ((k % 7) - 3) * 1.5), y = snap(l / 2 + (Math.floor(k / 7) - 2) * 1.5);
+      if (!state.elements.some(e => Math.hypot(e.x - x, e.y - y) < 1.2)) return [x, y];
+    }
+    return [w / 2, l / 2];
+  }
+  function deleteSelected() {
+    if (ui.mode === 'path' && ui.wp != null) { deleteWp(ui.wp); return; }
+    const el = ui.sel && byId(ui.sel);
+    if (!el) return;
+    checkpoint();
+    state.elements = state.elements.filter(e => e !== el);
+    state.path = state.path.filter(wp => wp.el !== el.id);
+    ui.sel = null; ui.wp = null;
+    invalidate(); renderPanel();
+  }
+  function duplicateSelected() {
+    const el = ui.sel && byId(ui.sel);
+    if (!el) return;
+    checkpoint();
+    const c = Object.assign({}, el, { id: uid(), x: clamp(el.x + 1, 0, state.hall.w), y: clamp(el.y + 1, 0, state.hall.l) });
+    state.elements.push(c);
+    ui.sel = c.id;
+    invalidate(); renderPanel();
+  }
+  function rotateSelected(deg) {
+    const el = ui.sel && byId(ui.sel);
+    if (!el) return;
+    checkpoint();
+    el.rot = ((el.rot + deg + 540) % 360) - 180;
+    invalidate(); renderPanel();
+  }
+  function nudge(dx, dy) {
+    const el = ui.sel && byId(ui.sel);
+    if (!el) return;
+    checkpoint();
+    const g = state.hall.grid || 0.1;
+    el.x = clamp(+(el.x + dx * g).toFixed(2), 0, state.hall.w);
+    el.y = clamp(+(el.y + dy * g).toFixed(2), 0, state.hall.l);
+    invalidate(); renderPanel();
+  }
+
+  // ---------- lennupunktide muutmine ----------
+  function insertWp(wp) {
+    checkpoint();
+    const at = ui.wp != null && ui.wp < state.path.length - 1 ? ui.wp + 1 : state.path.length;
+    state.path.splice(at, 0, wp);
+    ui.wp = at;
+    ui.tab = 'path';
+    invalidate(); renderPanel();
+  }
+  function addWpForElement(el) {
+    insertWp(Object.assign({ id: uid(), el: el.id }, wpDefaults(T(el).kind)));
+  }
+  function addFreeWp(x, y) {
+    insertWp({ id: uid(), el: null, x: snap(x), y: snap(y), z: state.cruise, hover: 0 });
+  }
+  function deleteWp(i) {
+    checkpoint();
+    state.path.splice(i, 1);
+    ui.wp = state.path.length ? Math.min(i, state.path.length - 1) : null;
+    invalidate(); renderPanel();
+  }
+  function moveWp(i, d) {
+    const j = i + d;
+    if (j < 0 || j >= state.path.length) return;
+    checkpoint();
+    [state.path[i], state.path[j]] = [state.path[j], state.path[i]];
+    ui.wp = j;
+    invalidate(); renderPanel();
+  }
+  // Tõstab punkti `from` kohale, kus ta on enne punkti `before` (before = path.length → lõppu)
+  function moveWpTo(from, before) {
+    const to = before > from ? before - 1 : before;
+    if (to === from) return;
+    checkpoint();
+    const [wp] = state.path.splice(from, 1);
+    state.path.splice(to, 0, wp);
+    ui.wp = to;
+    invalidate(); renderPanel();
+  }
+
+  // ---------- režiim ja vaated ----------
+  function setMode(m) {
+    ui.mode = m;
+    document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+    canvas.classList.toggle('path-mode', m === 'path');
+    ui.tab = m === 'path' ? 'path' : 'props';
+    if (m === 'build') ui.wp = null;
+    updateHint(); renderPanel(); requestRender();
+  }
+  function updateHint() {
+    $('#hint').innerHTML = ui.mode === 'path'
+      ? '<b>Lennurada:</b> klõpsa elemente lennujärjekorras · klõps põrandal lisab vaba punkti · uus punkt lisatakse valitud punkti järele · paremklõps või tühik + lohistamine liigutab vaadet'
+      : '<b>Ehita:</b> lohista elemente vasakult saali · <kbd>R</kbd>/<kbd>Shift+R</kbd> pöörab · <kbd>Del</kbd> kustutab · <kbd>Ctrl+D</kbd> kopeerib · Shift lohistamisel lülitab ruudustiku välja · ratas suumib';
+  }
+
+  // ---------- hiir ----------
+  function localPos(e) { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+  function segDist(px, py, a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
+    const t = L ? clamp(((px - a[0]) * dx + (py - a[1]) * dy) / L, 0, 1) : 0;
+    return Math.hypot(px - a[0] - t * dx, py - a[1] - t * dy);
+  }
+  function hitElement(mx, my) {
+    let best = null;
+    for (const h of hits) {
+      let ok = inPoly([mx, my], h.fp);
+      if (!ok) for (const it of h.items) {
+        if (it.k === 'l' ? segDist(mx, my, it.a, it.b) < Math.max(5, it.w / 2 + 2) : inPoly([mx, my], it.pts)) { ok = true; break; }
+      }
+      if (ok && (!best || h.d > best.d)) best = h;
+    }
+    return best && best.el;
+  }
+  function hitBadge(mx, my) { const b = badges.find(b => Math.hypot(b.x - mx, b.y - my) < 11); return b ? b.wp : null; }
+
+  let drag = null, spaceDown = false;
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+  canvas.addEventListener('pointerdown', e => {
+    canvas.focus();
+    const [mx, my] = localPos(e);
+    const pan = () => { drag = { kind: 'pan', mx, my, px: view.panX, py: view.panY }; canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); };
+    if (e.button === 1 || e.button === 2 || spaceDown) return pan();
+    if (e.button !== 0) return;
+    if (ui.mode === 'path') {
+      const b = hitBadge(mx, my);
+      if (b != null) { ui.wp = b; ui.tab = 'path'; renderPanel(); requestRender(); return; }
+      const el = hitElement(mx, my);
+      if (el) addWpForElement(el);
+      else {
+        const [x, y] = ground(mx, my);
+        if (x >= 0 && y >= 0 && x <= state.hall.w && y <= state.hall.l) addFreeWp(x, y);
+        else pan();
+      }
+      return;
+    }
+    const el = hitElement(mx, my);
+    if (!el) {
+      if (ui.sel) { ui.sel = null; renderPanel(); }
+      return pan();
+    }
+    if (ui.sel !== el.id) { ui.sel = el.id; ui.tab = 'props'; renderPanel(); }
+    drag = { kind: 'move', el, start: ground(mx, my), ox: el.x, oy: el.y, snap: JSON.stringify(state), moved: false };
+    canvas.setPointerCapture(e.pointerId);
+    canvas.classList.add('dragging');
+    requestRender();
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const [mx, my] = localPos(e);
+    if (drag.kind === 'pan') {
+      view.panX = drag.px + mx - drag.mx; view.panY = drag.py + my - drag.my;
+      requestRender(); return;
+    }
+    const g = ground(mx, my), el = drag.el;
+    const nx = clamp(snap(drag.ox + g[0] - drag.start[0], e.shiftKey), 0, state.hall.w);
+    const ny = clamp(snap(drag.oy + g[1] - drag.start[1], e.shiftKey), 0, state.hall.l);
+    if (nx !== el.x || ny !== el.y) {
+      if (!drag.moved) { undoS.push(drag.snap); redoS = []; drag.moved = true; }
+      el.x = nx; el.y = ny;
+      flight = computePath();
+      requestRender();
+    }
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    const moved = drag.kind === 'move' && drag.moved;
+    drag = null;
+    canvas.classList.remove('dragging');
+    if (moved) { invalidate(); renderPanel(); }
+  };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    if ((e.shiftKey || e.altKey) && ui.sel && ui.mode === 'build') { rotateSelected(e.deltaY > 0 ? 15 : -15); return; }
+    const [mx, my] = localPos(e), k = Math.exp(-e.deltaY * 0.0015), ns = clamp(view.scale * k, 8, 260);
+    const kx = (mx - W / 2 - view.panX) / view.scale, ky = (my - H / 2 - view.panY) / view.scale;
+    view.scale = ns;
+    view.panX = mx - W / 2 - kx * ns; view.panY = my - H / 2 - ky * ns;
+    requestRender();
+  }, { passive: false });
+
+  // lohistamine paletist
+  canvas.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  canvas.addEventListener('drop', e => {
+    e.preventDefault();
+    const data = e.dataTransfer.getData('text/plain');
+    if (!data.startsWith('track:')) return;
+    const type = data.slice(6);
+    if (!TYPES[type]) return;
+    const [mx, my] = localPos(e), [x, y] = ground(mx, my);
+    addElement(type, x, y);
+  });
+
+  // profiilil klõps kerib animatsiooni
+  prof.addEventListener('pointerdown', e => {
+    if (flight.length < 0.01) return;
+    const r = prof.getBoundingClientRect(), x = e.clientX - r.left;
+    anim.s = clamp((x - 40) / (PW - 54) * flight.length, 0, flight.length);
+    setPlaying(false);
+  });
+
+  // ---------- klaviatuur ----------
+  document.addEventListener('keydown', e => {
+    if (e.target.closest && e.target.closest('input, select, textarea')) return;
+    const k = e.key, ctrl = e.ctrlKey || e.metaKey;
+    if (k === ' ') { spaceDown = true; e.preventDefault(); return; }
+    if (ctrl && k.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+    if (ctrl && k.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+    if (ctrl && k.toLowerCase() === 'd') { e.preventDefault(); duplicateSelected(); return; }
+    if (ctrl && k.toLowerCase() === 's') { e.preventDefault(); saveToLib(); return; }
+    if (ctrl) return;
+    if (k === 'Delete' || k === 'Backspace') { e.preventDefault(); deleteSelected(); }
+    else if (k === 'r' || k === 'R') rotateSelected(e.shiftKey ? -15 : 15);
+    else if (k === 'Escape') { ui.sel = null; ui.wp = null; if (ui.mode === 'path') setMode('build'); else { renderPanel(); requestRender(); } }
+    else if (k === 'b' || k === 'B') setMode('build');
+    else if (k === 'l' || k === 'L') setMode('path');
+    else if (k === 'p' || k === 'P') setPlaying(!anim.playing);
+    else if (k === 'f' || k === 'F') { fitView(); requestRender(); }
+    else if (k === 't' || k === 'T') toggleTop();
+    else if (k === '[') rotateView(-45);
+    else if (k === ']') rotateView(45);
+    else if (k.startsWith('Arrow') && ui.sel && ui.mode === 'build') {
+      e.preventDefault();
+      // nooled liigutavad ekraanisuunas: leia lähim maailmatelg
+      const sx = { ArrowLeft: -1, ArrowRight: 1 }[k] || 0, sy = { ArrowUp: -1, ArrowDown: 1 }[k] || 0;
+      const o = ground(W / 2, H / 2), t = ground(W / 2 + sx * 50, H / 2 + sy * 50);
+      const dx = t[0] - o[0], dy = t[1] - o[1];
+      Math.abs(dx) > Math.abs(dy) ? nudge(Math.sign(dx), 0) : nudge(0, Math.sign(dy));
+    }
+  });
+  document.addEventListener('keyup', e => { if (e.key === ' ') spaceDown = false; });
+
+  function rotateView(d) { view.yaw += d; fitView(); requestRender(); }
+  function toggleTop() {
+    view.pitch = view.pitch > 80 ? 36 : 90;
+    $('#topBtn').textContent = view.pitch > 80 ? '2,5D' : 'Pealt';
+    fitView(); requestRender();
+  }
+
+  // ---------- failid ----------
+  function download(name, text, type) {
+    const a = document.createElement('a');
+    a.href = typeof text === 'string' && text.startsWith('data:') ? text : URL.createObjectURL(new Blob([text], { type: type || 'text/plain' }));
+    a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  const fileBase = () => (state.name || 'droonirada').replace(/[^\p{L}\p{N}_-]+/gu, '_');
+  function saveFile() { download(fileBase() + '.droonirada.json', JSON.stringify(state, null, 2), 'application/json'); }
+
+  // „Minu rajad“: salvestatud rajad selle brauseri mälus
+  function loadLib() { try { const l = JSON.parse(localStorage.getItem(LIB)); return Array.isArray(l) ? l : []; } catch (e) { return []; } }
+  function saveLib(lib) {
+    try { localStorage.setItem(LIB, JSON.stringify(lib)); return true; }
+    catch (e) { alert('Brauser ei luba radu salvestada. Kasuta „Laadi alla .json“.'); return false; }
+  }
+  function saveToLib() {
+    const lib = loadLib(), name = state.name.trim() || 'Nimetu rada', i = lib.findIndex(r => r.name === name);
+    const entry = { name, saved: Date.now(), data: JSON.parse(JSON.stringify(state)) };
+    if (i >= 0) lib[i] = entry; else lib.push(entry);
+    lib.sort((a, b) => a.name.localeCompare(b.name, 'et'));
+    if (!saveLib(lib)) return;
+    fillTrackSelect();
+    const b = document.querySelector('.topbar [data-act="save"]');
+    b.textContent = i >= 0 ? 'Uuendatud ✓' : 'Salvestatud ✓';
+    clearTimeout(b._t); b._t = setTimeout(() => { b.textContent = 'Salvesta'; }, 1800);
+    if (ui.tab === 'export') renderPanel();
+  }
+  function openState(data, name) {
+    if (!data || !Array.isArray(data.elements) || !Array.isArray(data.path)) { alert(`Rada „${name}“ on vigane.`); return; }
+    if (state.elements.length && !confirm(`Kas avada „${name}“? Praegune rada asendatakse (Ctrl+Z toob tagasi).`)) return;
+    checkpoint();
+    const copy = JSON.parse(JSON.stringify(data));
+    state = Object.assign(defaultState(), copy, { hall: Object.assign(defaultState().hall, copy.hall) });
+    state.elements = state.elements.filter(e => TYPES[e.type]);
+    ui.sel = null; ui.wp = null;
+    afterLoad(); fitView(); requestRender();
+  }
+  function openFromLib(i) { const r = loadLib()[i]; if (r) openState(r.data, r.name); }
+  // Juhendaja rajad: JSON-failid kaustas rajad/, nimekirja (rajad/index.json) koostab GitHubi töövoog.
+  // Failist avatud lehel (file://) fetch ei tööta – siis jääb rühm lihtsalt tühjaks.
+  let instructorList = [];
+  const instructorTracks = () => instructorList;
+  async function loadInstructorTracks() {
+    try {
+      const res = await fetch('rajad/index.json', { cache: 'no-cache' });
+      if (!res.ok) return;
+      const names = await res.json();
+      const tracks = await Promise.all(names.map(n => fetch('rajad/' + encodeURIComponent(n), { cache: 'no-cache' })
+        .then(r => r.ok ? r.json() : null)
+        .then(t => t && Array.isArray(t.elements) && Array.isArray(t.path) ? Object.assign(t, { name: t.name || n.replace(/\.json$/i, '') }) : null)
+        .catch(() => null)));
+      instructorList = tracks.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'et'));
+      fillTrackSelect();
+    } catch (e) { /* juhendaja radu pole saadaval */ }
+  }
+  function deleteFromLib(i) {
+    const lib = loadLib();
+    if (!lib[i] || !confirm(`Kas kustutada „${lib[i].name}“ loendist „Minu rajad“?`)) return;
+    lib.splice(i, 1);
+    saveLib(lib); fillTrackSelect(); renderPanel();
+  }
+  const dateStr = t => new Date(t).toLocaleString('et-EE', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  function fillTrackSelect() {
+    const lib = loadLib(), ins = instructorTracks();
+    tsel.innerHTML = '<option value="">Rajad…</option>' +
+      (lib.length ? `<optgroup label="Minu rajad">${lib.map((r, i) => `<option value="m:${i}">${esc(r.name)} · ${dateStr(r.saved)}</option>`).join('')}</optgroup>` : '') +
+      (ins.length ? `<optgroup label="Juhendaja rajad">${ins.map((r, i) => `<option value="j:${i}">${esc(r.name || 'Rada ' + (i + 1))}</option>`).join('')}</optgroup>` : '') +
+      `<optgroup label="Kataloogi komplektid">${TEMPLATES.map((t, i) => `<option value="t:${i}">${esc(t.name)} (${money(t.price)})</option>`).join('')}</optgroup>`;
+  }
+  function openFile(file) {
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const s = JSON.parse(r.result);
+        if (!Array.isArray(s.elements) || !Array.isArray(s.path)) throw new Error('vale vorming');
+        s.elements = s.elements.filter(e => TYPES[e.type]);
+        checkpoint();
+        state = Object.assign(defaultState(), s, { hall: Object.assign(defaultState().hall, s.hall) });
+        ui.sel = null; ui.wp = null;
+        afterLoad(); fitView(); requestRender();
+      } catch (err) { alert('Faili ei õnnestunud avada: ' + err.message); }
+    };
+    r.readAsText(file);
+  }
+
+  // ---------- eksport ----------
+  function startHeading() {
+    const w0 = state.path[0], el = w0 && w0.el && byId(w0.el);
+    return el && T(el).kind === 'pad' ? el.rot : 0;
+  }
+  function codroneCode() {
+    const d = DRONES.codrone, ops = flight.ops;
+    const rot = rad(startHeading()), f = [-Math.sin(rot), Math.cos(rot)], l = [-f[1], f[0]];
+    const lines = [
+      `# ${state.name} – CoDrone EDU`,
+      `# Genereeritud droonirajaplaneerijaga ${new Date().toLocaleDateString('et-EE')}`,
+      '# Droon asetatakse stardiplatsile nina noole suunas (vt stardiplatsi omadusi).',
+      '# move_distance(edasi, vasakule, üles, kiirus) – meetrites ja m/s, drooni enda suhtes.',
+      '# NB! Kontrolli liigutusi enne võistlust ohutus keskkonnas ja madalal kiirusel.',
+      '',
+      'from codrone_edu.drone import *',
+      'import time',
+      '',
+      'drone = Drone()',
+      'drone.pair()',
+      '',
+    ];
+    if (!ops.length) return lines.concat(['# Lennurada on tühi.', 'drone.close()']).join('\n');
+    let pos = null, lastWp = -1;
+    for (const o of ops) {
+      if (o.wp !== lastWp && o.op !== 'land') { lines.push('', `# ${o.label} – ${o.act}`); lastWp = o.wp; }
+      if (o.op === 'takeoff') { lines.push('drone.takeoff()', 'time.sleep(1)'); pos = [o.p[0], o.p[1], d.takeoffZ]; }
+      else if (o.op === 'move' && pos) {
+        const v = sub(o.p, pos);
+        if (len3(v) < 0.03) continue;
+        const fw = v[0] * f[0] + v[1] * f[1], lf = v[0] * l[0] + v[1] * l[1];
+        lines.push(`drone.move_distance(${fw.toFixed(2)}, ${lf.toFixed(2)}, ${v[2].toFixed(2)}, ${d.speed})`);
+        pos = o.p;
+      } else if (o.op === 'wait') lines.push(`time.sleep(${o.t})`);
+      else if (o.op === 'land') { lines.push('', `# ${o.label} – maandumine`, 'drone.land()'); pos = null; lastWp = -1; }
+    }
+    lines.push('drone.close()');
+    return lines.join('\n');
+  }
+  function flightPlan() {
+    const rows = [];
+    let pos = null, cur = null;
+    for (const o of flight.ops) {
+      if (o.op === 'takeoff') { pos = [o.p[0], o.p[1], 0]; cur = { wp: o.wp, label: o.label, act: 'õhkutõus', dist: 0, hdg: null, z: 0 }; rows.push(cur); continue; }
+      if (o.op === 'land') {
+        if (cur && cur.wp === o.wp) { cur.act = 'maandumine'; cur.z = 0; }
+        else rows.push({ label: o.label, act: 'maandumine', dist: 0, hdg: null, z: 0 });
+        cur = null; continue;
+      }
+      if (o.op === 'wait') { rows.push({ label: o.label, act: o.act, dist: 0, hdg: null, z: pos ? pos[2] : 0 }); cur = null; continue; }
+      if (!pos) continue;
+      const v = sub(o.p, pos), h = Math.hypot(v[0], v[1]);
+      if (!cur || cur.wp !== o.wp) {
+        cur = { wp: o.wp, label: o.label, act: o.act, dist: 0, hdg: h > 0.02 ? (Math.atan2(v[0], v[1]) * 180 / Math.PI + 360) % 360 : null, z: o.p[2] };
+        rows.push(cur);
+      }
+      if (cur.hdg == null && h > 0.02) cur.hdg = (Math.atan2(v[0], v[1]) * 180 / Math.PI + 360) % 360;
+      cur.dist += h; cur.z = o.p[2];
+      pos = o.p;
+    }
+    return rows;
+  }
+  function planCsv() {
+    const rows = flightPlan();
+    return ['Nr;Etapp;Tegevus;Kaugus (m);Suund (°);Kõrgus (m)']
+      .concat(rows.map((r, i) => [i + 1, r.label, r.act, num(r.dist, 2), r.hdg == null ? '' : Math.round(r.hdg), num(r.z, 2)].join(';')))
+      .join('\n');
+  }
+  function materials() {
+    const m = new Map();
+    for (const el of state.elements) {
+      const key = el.type + '|' + el.v;
+      if (!m.has(key)) m.set(key, { t: T(el), v: V(el), n: 0 });
+      m.get(key).n++;
+    }
+    return [...m.values()].sort((a, b) => GROUPS.indexOf(a.t.group) - GROUPS.indexOf(b.t.group) || a.t.name.localeCompare(b.t.name, 'et'));
+  }
+  function materialsCsv() {
+    return ['Element;Kataloogi nimi;Suurus;Kogus;Hind/tk (USD);Kokku (USD)']
+      .concat(materials().map(r => [r.t.name, r.t.en, r.v.label, r.n, r.v.price == null ? '' : r.v.price.toFixed(2).replace('.', ','), r.v.price == null ? '' : (r.v.price * r.n).toFixed(2).replace('.', ',')].join(';')))
+      .join('\n');
+  }
+  function exportPng() {
+    const was = ui.sel;
+    ui.sel = null; render();
+    download(fileBase() + '.png', canvas.toDataURL('image/png'));
+    ui.sel = was; render();
+  }
+
+  // ---------- paneel ----------
+  function field(label, html) { return `<label class="field"><span>${label}</span>${html}</label>`; }
+  function numIn(k, v, min, max, step) { return `<input type="number" data-k="${k}" value="${+v.toFixed(2)}" min="${min}" max="${max}" step="${step}">`; }
+  function rangeIn(k, v, min, max, step, unit) {
+    return `<div class="range"><input type="range" data-k="${k}" value="${v}" min="${min}" max="${max}" step="${step}"><output data-out="${k}">${num(v, 2)}${unit}</output></div>`;
+  }
+  function selectIn(k, opts, cur) {
+    return `<select data-k="${k}">${opts.map(([v, t]) => `<option value="${v}"${String(v) === String(cur) ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+  }
+
+  function panelProps() {
+    const el = ui.sel && byId(ui.sel);
+    if (!el) {
+      const h = state.hall;
+      return `<h2>Saal</h2>
+        ${field('Laius (m)', numIn('hall.w', h.w, 4, 60, 0.5))}
+        ${field('Pikkus (m)', numIn('hall.l', h.l, 4, 60, 0.5))}
+        ${field('Lae kõrgus (m)', numIn('hall.h', h.h, 2, 15, 0.1))}
+        ${field('Ruudustik', selectIn('hall.grid', [[0.25, '25 cm'], [0.5, '50 cm'], [1, '1 m']], h.grid))}
+        <h4>Kuidas kasutada</h4>
+        <p class="note">Lohista elemente vasakult paletist saali või klõpsa elemendil, et see keskele lisada. Klõps elemendil valib selle.</p>
+        <p class="note"><kbd>R</kbd> pöörab 15° · <kbd>Shift</kbd>+ratas pöörab · nooled nihutavad · <kbd>Del</kbd> kustutab · <kbd>Ctrl+D</kbd> kopeerib · <kbd>Ctrl+Z</kbd> võtab tagasi · <kbd>[</kbd> <kbd>]</kbd> pööravad vaadet · <kbd>T</kbd> pealtvaade · <kbd>L</kbd> lennurada · <kbd>P</kbd> esitab.</p>
+        <p class="note">Pooleli olev rada säilib brauseris automaatselt. „Salvesta“ (<kbd>Ctrl+S</kbd>) lisab raja tema nimega loendisse „Rajad…“ alamloendisse „Minu rajad“.</p>`;
+    }
+    const t = T(el), v = V(el), z = elZ(el);
+    const os = t.kind === 'gate' ? openings(el) : [];
+    const inPath = state.path.map((w, i) => w.el === el.id ? i + 1 : null).filter(Boolean);
+    let html = `<h2><img src="../assets/track/${t.icon}" alt="">${esc(t.name)}</h2>
+      <p class="sub">${esc(t.en)}${inPath.length ? ' · lennupunkt ' + inPath.join(', ') : ''}</p>
+      ${field('Suurus', selectIn('el.v', t.variants.map((x, i) => [i, x.label + (x.price != null ? ' – ' + money(x.price) : '')]), el.v))}
+      ${field('Pööre', rangeIn('el.rot', el.rot, -180, 180, 15, '°'))}
+      ${field('X (m)', numIn('el.x', el.x, 0, state.hall.w, state.hall.grid))}
+      ${field('Y (m)', numIn('el.y', el.y, 0, state.hall.l, state.hall.grid))}`;
+    if (t.adjustable) {
+      const [a, b] = t.zRange(v);
+      html += field('Kõrgus (kesk)', rangeIn('el.z', z, +a.toFixed(2), b, 0.05, ' m'));
+    }
+    html += `<div class="row">
+        <button data-act="el-addwp" class="primary">+ Lisa lennurajale</button>
+        <button data-act="el-rot90">Pööra 90°</button>
+        <button data-act="el-dup">Kopeeri</button>
+        <button data-act="el-del" class="danger">Kustuta</button>
+      </div>`;
+    if (os.length) {
+      html += '<h4>Avad</h4><p class="note">' + os.map(o => `${esc(o.name)}: ${Math.round(o.size * 100)} cm` +
+        (o.zMin != null ? `, kõrgusel ${num(o.zMin, 2)}–${num(o.zMax, 2)} m` : ', läbitakse ülalt alla')).join('<br>') +
+        '</p><p class="note">Oranž nool näitab läbilennu suunda.</p>';
+    }
+    if (t.kind === 'pad') html += '<p class="note">Oranž nool näitab drooni nina suunda stardis. Sellest sõltub CoDrone EDU koodi suund.</p>';
+    return html;
+  }
+
+  function panelPath() {
+    const d = DRONES[state.drone];
+    let html = `${field('Droon', selectIn('drone', Object.entries(DRONES).map(([k, x]) => [k, x.name]), state.drone))}
+      ${field('Lennukõrgus', rangeIn('cruise', state.cruise, 0.4, Math.min(3, state.hall.h - 0.3), 0.1, ' m'))}`;
+    if (flight.length > 0) {
+      const t = flightTime();
+      html += `<div class="stats">
+        <div class="stat"><b>${num(flight.length, 1)} m</b><span>trajektoori pikkus</span></div>
+        <div class="stat"><b>${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, '0')}</b><span>hinnanguline aeg (${num(d.speed, 1)} m/s)</span></div>
+      </div>`;
+    }
+    html += '<h4>Lennupunktid</h4>';
+    if (!state.path.length) {
+      html += `<div class="empty">${ui.mode === 'path' ? 'Klõpsa saalis elemente lennujärjekorras.<br>Alusta stardiplatsist.' : 'Lülita ülal sisse „Lennurada“ ja klõpsa elemente lennujärjekorras.'}</div>`;
+    } else {
+      html += '<ol class="wp-list">' + state.path.map((wp, i) => {
+        const lbl = wpLabel(wp, i).replace(/^\d+\.\s*/, '');
+        return `<li data-wp="${i}" class="${ui.wp === i ? 'on' : ''}" draggable="true" title="Lohista järjekorra muutmiseks">
+          <span class="wp-grip" aria-hidden="true">⠿</span>
+          <span class="wp-num">${i + 1}</span>
+          <span class="wp-text">${esc(lbl)}<small>${esc(wpAction(wp, i, state.path.length))}</small></span>
+          <button data-act="wp-up" data-i="${i}" title="Varem">↑</button>
+          <button data-act="wp-down" data-i="${i}" title="Hiljem">↓</button>
+          <button data-act="wp-del" data-i="${i}" title="Eemalda" class="danger">✕</button>
+        </li>`;
+      }).join('') + '</ol>';
+      html += `<div class="row"><button data-act="path-rev">Pööra rada ümber</button><button data-act="path-clear" class="danger">Tühjenda</button></div>`;
+    }
+    const wp = ui.wp != null && state.path[ui.wp];
+    if (wp) {
+      html += `<h4>Punkt ${ui.wp + 1}</h4>`;
+      const el = wp.el && byId(wp.el), kind = el ? T(el).kind : 'free';
+      if (kind === 'gate') {
+        const os = T(el).openings(V(el), elZ(el));
+        if (os.length > 1) html += field('Ava', selectIn('wp.opening', os.map((o, i) => [i, o.name]), wp.opening || 0));
+        html += field('Suund', selectIn('wp.dir', [['auto', 'automaatne'], ['fwd', 'noole suunas'], ['rev', 'noolele vastu']], wp.dir || 'auto'));
+      } else if (kind === 'pylon') {
+        html += field('Lipp jääb', selectIn('wp.side', [['left', 'vasakule'], ['right', 'paremale']], wp.side || 'left'));
+        html += field('Manööver', selectIn('wp.turn', [['pass', 'möödu'], ['uturn', 'U-pööre'], ['circle', 'täisring']], wp.turn || 'pass'));
+        html += field('Kõrgus', rangeIn('wp.z', wp.z != null ? wp.z : state.cruise, 0.4, Math.min(3, state.hall.h - 0.3), 0.1, ' m'));
+        html += field('Raadius', rangeIn('wp.r', wp.r || 0.7, 0.4, 2, 0.1, ' m'));
+      } else if (kind === 'free') {
+        html += field('X (m)', numIn('wp.x', wp.x, 0, state.hall.w, 0.25));
+        html += field('Y (m)', numIn('wp.y', wp.y, 0, state.hall.l, 0.25));
+        html += field('Kõrgus', rangeIn('wp.z', wp.z, 0.3, Math.min(3, state.hall.h - 0.3), 0.1, ' m'));
+      }
+      if (kind !== 'pad' || (ui.wp > 0 && ui.wp < state.path.length - 1)) {
+        html += field(kind === 'pad' ? 'Oota platsil' : 'Hõljumine', rangeIn('wp.hover', wp.hover || 0, 0, 10, 0.5, ' s'));
+      }
+    }
+    return html;
+  }
+
+  function panelCheck() {
+    if (!issues.length) return '<ul class="issues"><li><span class="lvl ok">✓</span>Probleeme ei leitud.</li></ul>';
+    const icon = { err: '!', warn: '!', info: 'i' };
+    return `<ul class="issues">${issues.map(i => `<li${i.el ? ` data-el="${i.el}"` : ''}><span class="lvl ${i.lvl}">${icon[i.lvl]}</span><span>${esc(i.msg)}</span></li>`).join('')}</ul>
+      <p class="note">Klõps teatel valib vastava elemendi.</p>`;
+  }
+
+  function panelMat() {
+    const rows = materials();
+    if (!rows.length) return '<div class="empty">Saalis pole veel elemente.</div>';
+    let total = 0, missing = 0;
+    const body = rows.map(r => {
+      if (r.v.price == null) missing++; else total += r.v.price * r.n;
+      return `<tr><td>${esc(r.t.name)}<br><small class="note">${esc(r.v.label)}</small></td><td class="num">${r.n}</td>
+        <td class="num">${r.v.price == null ? '–' : money(r.v.price)}</td><td class="num">${r.v.price == null ? '–' : money(r.v.price * r.n)}</td></tr>`;
+    }).join('');
+    return `<table class="mat"><thead><tr><th>Element</th><th class="num">tk</th><th class="num">Hind</th><th class="num">Kokku</th></tr></thead>
+      <tbody>${body}</tbody><tfoot><tr><td>Kokku</td><td class="num">${state.elements.length}</td><td></td><td class="num">${money(total)}</td></tr></tfoot></table>
+      <p class="note">Hinnad on võetud kataloogist „Catalog of UAV Tracks 2026“ (USD, EXW, ilma transpordi ja maksudeta).${missing ? ' Kriipsuga elemente müüakse ainult komplektina.' : ''}</p>
+      <div class="row"><button data-act="mat-csv">Laadi alla CSV</button></div>`;
+  }
+
+  function panelExport() {
+    const d = DRONES[state.drone];
+    let html = `${field('Droon', selectIn('drone', Object.entries(DRONES).map(([k, x]) => [k, x.name]), state.drone))}`;
+    if (d.code) {
+      html += `<h4>Python (CoDrone EDU)</h4>
+        <p class="note">Kood kasutab teeki <code>codrone_edu</code>. Droon lendab ilma pööramata, nina stardiplatsi noole suunas.</p>
+        <textarea class="code" readonly spellcheck="false">${esc(codroneCode())}</textarea>
+        <div class="row"><button data-act="copy-code">Kopeeri</button><button data-act="dl-code">Laadi alla .py</button></div>`;
+    } else {
+      const rows = flightPlan();
+      html += `<h4>Lennuplaan (DJI Neo 2)</h4>
+        <p class="note">DJI Neo 2 jaoks rakendus koodi ei koosta. Selle asemel saad lennuplaani piloodile ja kohtunikele: etapid, kaugused, suunad (0° = saali Y-telg) ja kõrgused.</p>
+        ${rows.length ? `<table class="plan"><thead><tr><th>#</th><th>Etapp</th><th>Tegevus</th><th class="num">m</th><th class="num">°</th><th class="num">h</th></tr></thead><tbody>
+        ${rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.label.replace(/^\d+\.\s*/, ''))}</td><td>${esc(r.act)}</td><td class="num">${num(r.dist, 1)}</td><td class="num">${r.hdg == null ? '' : Math.round(r.hdg)}</td><td class="num">${num(r.z, 1)}</td></tr>`).join('')}
+        </tbody></table>` : '<div class="empty">Lennurada puudub.</div>'}
+        <div class="row"><button data-act="dl-csv">Laadi alla CSV</button></div>`;
+    }
+    html += `<h4>Rada</h4><div class="row"><button data-act="save">Salvesta loendisse</button><button data-act="download">Laadi alla .json</button><button data-act="png">Salvesta pilt</button><button data-act="print">Prindi</button></div>`;
+    const lib = loadLib();
+    html += '<h4>Minu rajad</h4>' + (lib.length
+      ? '<ol class="wp-list">' + lib.map((r, i) => `<li class="${r.name === state.name ? 'on' : ''}">
+          <span class="wp-text">${esc(r.name)}<small>${dateStr(r.saved)} · ${r.data.elements.length} elementi</small></span>
+          <button data-act="lib-open" data-i="${i}">Ava</button>
+          <button data-act="lib-del" data-i="${i}" class="danger" title="Kustuta loendist">✕</button></li>`).join('') + '</ol>'
+      : '<div class="empty">Salvestatud radu pole. Vajuta ülal „Salvesta“.</div>') +
+      '<p class="note">Rajad salvestatakse selle arvuti brauserisse. Teise arvutisse viimiseks vali „Laadi alla .json“ ja ava fail seal nupuga „Ava fail…“.</p>' +
+      `<h4>Juhendajale</h4>
+      <p class="note">Et rada ilmuks kõigile rühmas „Juhendaja rajad“, vali „Laadi alla .json“, kopeeri fail repo kausta <code>rajaplaneerija/rajad/</code> ja lae see GitHubi.</p>`;
+    return html;
+  }
+
+  function renderPanel() {
+    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === ui.tab));
+    const f = { props: panelProps, path: panelPath, check: panelCheck, mat: panelMat, export: panelExport }[ui.tab];
+    panelBody.innerHTML = f();
+  }
+
+  function applyField(k, val) {
+    const el = ui.sel && byId(ui.sel), wp = ui.wp != null && state.path[ui.wp];
+    const [a, b] = k.split('.');
+    if (a === 'hall') {
+      if (b === 'grid') state.hall.grid = +val;
+      else state.hall[b] = clamp(val, b === 'h' ? 2 : 4, b === 'h' ? 15 : 60);
+      if (b !== 'h' && b !== 'grid') { fitView(); }
+    } else if (a === 'el' && el) {
+      if (b === 'v') { el.v = +val; delete el.z; }
+      else if (b === 'rot') el.rot = val;
+      else if (b === 'x') el.x = clamp(val, 0, state.hall.w);
+      else if (b === 'y') el.y = clamp(val, 0, state.hall.l);
+      else if (b === 'z') el.z = val;
+    } else if (a === 'wp' && wp) {
+      wp[b] = ['opening', 'x', 'y', 'z', 'r', 'hover'].includes(b) ? +val : val;
+    } else if (k === 'cruise') state.cruise = val;
+    else if (k === 'drone') state.drone = val;
+  }
+
+  function onField(e, commit) {
+    const t = e.target, k = t.dataset.k;
+    if (!k) return;
+    const val = t.type === 'number' || t.type === 'range' ? parseFloat(t.value) : t.value;
+    if ((t.type === 'number' || t.type === 'range') && !isFinite(val)) return;
+    beginEdit();
+    applyField(k, val);
+    const out = panelBody.querySelector(`[data-out="${k}"]`);
+    if (out) out.textContent = num(val, 2) + (k.endsWith('rot') ? '°' : k.endsWith('hover') ? ' s' : ' m');
+    invalidate();
+    if (commit) { endEdit(); if (t.tagName === 'SELECT' || t.type === 'range') renderPanel(); }
+  }
+  panelBody.addEventListener('input', e => onField(e, false));
+  panelBody.addEventListener('change', e => onField(e, true));
+  // lennupunktide järjestamine lohistades
+  let wpDrag = null;
+  const clearDropMarks = () => panelBody.querySelectorAll('.drop-before, .drop-after').forEach(n => n.classList.remove('drop-before', 'drop-after'));
+  const dropTarget = e => {
+    const li = e.target.closest('li[data-wp]');
+    if (!li) return null;
+    const r = li.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2;
+    return { li, before: +li.dataset.wp + (after ? 1 : 0), after };
+  };
+  panelBody.addEventListener('dragstart', e => {
+    const li = e.target.closest('li[data-wp]');
+    if (!li) return;
+    wpDrag = +li.dataset.wp;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', 'wp:' + wpDrag);
+    li.classList.add('dragging');
+  });
+  panelBody.addEventListener('dragover', e => {
+    if (wpDrag == null) return;
+    const t = dropTarget(e);
+    if (!t) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    clearDropMarks();
+    t.li.classList.add(t.after ? 'drop-after' : 'drop-before');
+  });
+  panelBody.addEventListener('drop', e => {
+    if (wpDrag == null) return;
+    const t = dropTarget(e);
+    e.preventDefault();
+    const from = wpDrag;
+    wpDrag = null;
+    clearDropMarks();
+    if (t) moveWpTo(from, t.before);
+  });
+  panelBody.addEventListener('dragend', () => {
+    wpDrag = null;
+    clearDropMarks();
+    panelBody.querySelectorAll('li.dragging').forEach(n => n.classList.remove('dragging'));
+  });
+
+  panelBody.addEventListener('click', e => {
+    const li = e.target.closest('li[data-wp]'), act = e.target.closest('[data-act]');
+    if (act) {
+      const i = +act.dataset.i;
+      switch (act.dataset.act) {
+        case 'el-del': deleteSelected(); break;
+        case 'el-dup': duplicateSelected(); break;
+        case 'el-rot90': rotateSelected(90); break;
+        case 'el-addwp': if (ui.sel && byId(ui.sel)) addWpForElement(byId(ui.sel)); break;
+        case 'wp-up': moveWp(i, -1); break;
+        case 'wp-down': moveWp(i, 1); break;
+        case 'wp-del': deleteWp(i); break;
+        case 'path-clear': if (confirm('Kas tühjendada kogu lennurada?')) { checkpoint(); state.path = []; ui.wp = null; invalidate(); renderPanel(); } break;
+        case 'path-rev': checkpoint(); state.path.reverse(); state.path.forEach(w => { if (w.side) w.side = w.side === 'left' ? 'right' : 'left'; }); invalidate(); renderPanel(); break;
+        case 'copy-code': navigator.clipboard.writeText(codroneCode()).then(() => { act.textContent = 'Kopeeritud ✓'; }); break;
+        case 'dl-code': download(fileBase() + '.py', codroneCode(), 'text/x-python'); break;
+        case 'dl-csv': download(fileBase() + '-lennuplaan.csv', '﻿' + planCsv(), 'text/csv'); break;
+        case 'mat-csv': download(fileBase() + '-materjalid.csv', '﻿' + materialsCsv(), 'text/csv'); break;
+        case 'save': saveToLib(); break;
+        case 'download': saveFile(); break;
+        case 'lib-open': openFromLib(i); break;
+        case 'lib-del': deleteFromLib(i); break;
+        case 'png': exportPng(); break;
+        case 'print': window.print(); break;
+      }
+      return;
+    }
+    if (li) { ui.wp = +li.dataset.wp; renderPanel(); requestRender(); return; }
+    const iss = e.target.closest('li[data-el]');
+    if (iss && byId(iss.dataset.el)) { ui.sel = iss.dataset.el; if (ui.mode !== 'build') setMode('build'); else { ui.tab = 'props'; renderPanel(); requestRender(); } }
+  });
+
+  $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) { ui.tab = b.dataset.tab; renderPanel(); } });
+
+  // ---------- ülariba ----------
+  document.querySelector('.topbar').addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.mode) { setMode(b.dataset.mode); return; }
+    switch (b.dataset.act) {
+      case 'new':
+        if (state.elements.length && !confirm('Kas alustada uut tühja rada? Praegune rada asendatakse.')) return;
+        checkpoint(); state = Object.assign(defaultState(), { drone: state.drone }); ui.sel = null; ui.wp = null; afterLoad(); fitView(); requestRender(); break;
+      case 'open': $('#fileIn').click(); break;
+      case 'save': saveToLib(); break;
+      case 'undo': undo(); break;
+      case 'redo': redo(); break;
+      case 'rotL': rotateView(-45); break;
+      case 'rotR': rotateView(45); break;
+      case 'top': toggleTop(); break;
+      case 'fit': fitView(); requestRender(); break;
+      case 'play': setPlaying(!anim.playing); break;
+      case 'png': exportPng(); break;
+    }
+  });
+  $('#fileIn').addEventListener('change', e => { if (e.target.files[0]) openFile(e.target.files[0]); e.target.value = ''; });
+  $('#speedSel').addEventListener('change', e => { anim.mult = +e.target.value; });
+  $('#trackName').addEventListener('change', e => { checkpoint(); state.name = e.target.value.trim() || 'Nimetu rada'; save(); });
+  const tsel = $('#templateSel');
+  fillTrackSelect();
+  loadInstructorTracks();
+  tsel.addEventListener('change', () => {
+    const [kind, i] = tsel.value.split(':');
+    tsel.value = '';
+    if (kind === 'm') { openFromLib(+i); return; }
+    if (kind === 'j') { const r = instructorTracks()[+i]; if (r) openState(r, r.name || 'Juhendaja rada'); return; }
+    const t = TEMPLATES[+i];
+    if (kind !== 't' || !t) return;
+    if (state.elements.length && !confirm(`Kas laadida ${t.name}? Praegune rada asendatakse (Ctrl+Z toob tagasi).`)) return;
+    checkpoint(); loadTemplate(t); ui.sel = null; ui.wp = null; afterLoad(); fitView(); requestRender();
+  });
+
+  // ---------- palett ----------
+  function renderPalette() {
+    $('#palette').innerHTML = GROUPS.map(g => `<h3>${g}</h3><div class="pal-grid">${Object.entries(TYPES).filter(([, t]) => t.group === g).map(([k, t]) =>
+      `<button class="pal-item" draggable="true" data-type="${k}" title="${esc(t.name)} (${esc(t.en)}) – lohista saali või klõpsa"><img src="../assets/track/${t.icon}" alt=""><span>${esc(t.name)}</span></button>`).join('')}</div>`).join('');
+  }
+  $('#palette').addEventListener('dragstart', e => {
+    const b = e.target.closest('[data-type]');
+    if (!b) return;
+    e.dataTransfer.setData('text/plain', 'track:' + b.dataset.type);
+    e.dataTransfer.effectAllowed = 'copy';
+    const img = b.querySelector('img');
+    if (img) e.dataTransfer.setDragImage(img, 20, 20);
+  });
+  $('#palette').addEventListener('click', e => {
+    const b = e.target.closest('[data-type]');
+    if (!b) return;
+    const [x, y] = freeSpot();
+    addElement(b.dataset.type, x, y);
+  });
+
+  // ---------- suurus ja käivitus ----------
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    const r = canvas.getBoundingClientRect(), q = prof.getBoundingClientRect();
+    const first = !W;
+    W = r.width; H = r.height; PW = q.width; PH = q.height;
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    prof.width = Math.round(PW * dpr); prof.height = Math.round(PH * dpr);
+    if (first) fitView();
+    requestRender();
+  }
+
+  try { const s = JSON.parse(localStorage.getItem(STORE)); if (s && Array.isArray(s.elements)) state = Object.assign(defaultState(), s); } catch (e) { /* tühi */ }
+  if (!state) { state = defaultState(); loadTemplate(TEMPLATES[0]); }
+  state.elements = state.elements.filter(e => TYPES[e.type]);
+  $('#trackName').value = state.name;
+  renderPalette();
+  setMode('build');
+  window.addEventListener('resize', resize);
+  resize();
+  invalidate();
+  renderPanel();
+})();
