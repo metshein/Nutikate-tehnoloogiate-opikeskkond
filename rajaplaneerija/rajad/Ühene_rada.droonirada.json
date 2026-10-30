@@ -1,5 +1,5 @@
 {
-  "name": "DK-Track-01uus",
+  "name": "Ühene rada",
   "hall": {
     "w": 20,
     "l": 10,
@@ -26,19 +26,11 @@
       "rot": -90
     },
     {
-      "id": "ct6257a",
-      "type": "tunnel",
-      "v": 0,
-      "x": 9,
-      "y": 6,
-      "rot": -90
-    },
-    {
       "id": "wan26wx",
       "type": "flag",
       "v": 1,
-      "x": 17,
-      "y": 6,
+      "x": 17.5,
+      "y": 5.5,
       "rot": 0
     },
     {
@@ -53,8 +45,8 @@
       "id": "2tyqfx3",
       "type": "arch",
       "v": 0,
-      "x": 9.5,
-      "y": 3,
+      "x": 9,
+      "y": 4.5,
       "rot": 90
     },
     {
@@ -62,7 +54,7 @@
       "type": "flag",
       "v": 1,
       "x": 7,
-      "y": 3,
+      "y": 2.5,
       "rot": 0
     },
     {
@@ -70,7 +62,7 @@
       "type": "flag",
       "v": 1,
       "x": 5.5,
-      "y": 3,
+      "y": 3.5,
       "rot": 0
     },
     {
@@ -78,7 +70,7 @@
       "type": "flag",
       "v": 1,
       "x": 4,
-      "y": 3,
+      "y": 2.5,
       "rot": 0
     },
     {
@@ -90,12 +82,12 @@
       "rot": -90
     },
     {
-      "id": "t1np16c",
-      "type": "groundTunnel",
+      "id": "bt21dmr",
+      "type": "arch",
       "v": 0,
-      "x": 8.5,
-      "y": 2,
-      "rot": 0
+      "x": 9,
+      "y": 7,
+      "rot": -90
     }
   ],
   "path": [
@@ -112,8 +104,8 @@
       "hover": 0
     },
     {
-      "id": "9zo9kvv",
-      "el": "ct6257a",
+      "id": "2bb7edi",
+      "el": "bt21dmr",
       "opening": 0,
       "dir": "auto",
       "hover": 0
