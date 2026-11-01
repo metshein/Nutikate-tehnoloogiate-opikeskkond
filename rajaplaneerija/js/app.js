@@ -1424,8 +1424,15 @@
 
   // ---------- palett ----------
   function renderPalette() {
+    // Kataloogi hind või hinnavahemik (ainult komplektis müüdavad variandid jäävad välja)
+    const priceRange = t => {
+      const p = t.variants.map(v => v.price).filter(x => x != null);
+      if (!p.length) return '';
+      const lo = Math.min(...p), hi = Math.max(...p);
+      return lo === hi ? money(lo) : money(lo) + '–' + hi.toFixed(2);
+    };
     $('#palette').innerHTML = GROUPS.map(g => `<h3>${groupName(g)}</h3><div class="pal-grid">${Object.entries(TYPES).filter(([, t]) => t.group === g).map(([k, t]) =>
-      `<button class="pal-item" draggable="true" data-type="${k}" title="${esc(tr('palette.item.t', { name: typeName(t), en: t.en }))}"><img src="../assets/track/${t.icon}" alt=""><span>${esc(typeName(t))}</span></button>`).join('')}</div>`).join('');
+      `<button class="pal-item" draggable="true" data-type="${k}" title="${esc(tr('palette.item.t', { name: typeName(t), en: t.en }))}"><img src="../assets/track/${t.icon}" alt=""><span>${esc(typeName(t))}</span><small class="pal-price">${priceRange(t)}</small></button>`).join('')}</div>`).join('');
   }
   $('#palette').addEventListener('dragstart', e => {
     const b = e.target.closest('[data-type]');
